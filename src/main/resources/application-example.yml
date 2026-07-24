@@ -1,0 +1,25 @@
+server:
+  port: 8080
+
+milvus:
+  host: localhost
+  port: 19530
+
+embedding:
+  url: http://localhost:8002
+
+neo4j:
+  uri: bolt://localhost:7687
+  username: neo4j
+  password: YOUR_NEO4J_PASSWORD
+  database: neo4j
+
+rag:
+  similarity-threshold: 0.5
+  kg-lookup-threshold: 0.6
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
