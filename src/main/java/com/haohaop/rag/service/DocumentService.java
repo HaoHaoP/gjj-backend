@@ -143,11 +143,12 @@ public class DocumentService {
                 minioPath, originalFilename, fileSize);
         documentRepository.save(doc);
 
-        // 3. Write Chunks to PG
+        // 3. Write Chunks to PG (batch)
+        List<ChunkEntity> chunkEntities = new ArrayList<>();
         for (int i = 0; i < chunks.size(); i++) {
-            ChunkEntity c = new ChunkEntity(documentId, i + 1, chunks.get(i), null, title);
-            chunkRepository.save(c);
+            chunkEntities.add(new ChunkEntity(documentId, i + 1, chunks.get(i), null, title));
         }
+        chunkRepository.saveAll(chunkEntities);
 
         log.info("Ingested document '{}': {} chunks", title, chunks.size());
         return Map.of("documentId", documentId, "chunks", chunks.size(), "title", title);

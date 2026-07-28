@@ -2,25 +2,26 @@ package com.haohaop.rag.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import okhttp3.*;
 import org.springframework.stereotype.Service;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.InputStreamReader;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.io.*;
+import java.util.*;
+import java.util.concurrent.*;
 
 @Slf4j
 @Service
 public class SyncService {
 
-    private static final String PYTHON3 = "/opt/homebrew/bin/python3";
-    private static final ObjectMapper mapper = new ObjectMapper();
-
-    private final Map<String, SyncTask> tasks = new ConcurrentHashMap<>();
+    private static final String PIPELINE_URL = "http://localhost:8001";
     private final DocumentService documentService;
     private final MinioService minioService;
+    private final Map<String, SyncTask> tasks = new ConcurrentHashMap<>();
+    private final ObjectMapper mapper = new ObjectMapper();
+    private final OkHttpClient httpClient = new OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(600, TimeUnit.SECONDS)
+            .build();
 
     public SyncService(DocumentService documentService, MinioService minioService) {
         this.documentService = documentService;
@@ -34,137 +35,108 @@ public class SyncService {
         task.progress = 0;
         tasks.put(taskId, task);
 
-        String deepseekKey = System.getenv("DEEPSEEK_API_KEY");
-        if (deepseekKey == null || deepseekKey.isEmpty()) {
-            task.status = "failed";
-            task.error = "DEEPSEEK_API_KEY not set";
-            return taskId;
-        }
-
         new Thread(() -> {
+            try { documentService.deleteBySource("SYNC"); } catch (Exception ignored) {}
             try {
-                File workDir = new File(System.getProperty("user.home"), "Documents/nanning-gjj-rag");
+                // ── Step 1: Call pipeline (crawl+extract, 0-90%) ──
+                task.stage = "crawl+extract";
+                log.info("Calling pipeline: POST {}/pipeline/sync", PIPELINE_URL);
+                
+                RequestBody emptyBody = RequestBody.create("", MediaType.parse("application/json"));
+                Request req = new Request.Builder().url(PIPELINE_URL + "/pipeline/sync").post(emptyBody).build();
+                String respBody;
+                try (Response resp = httpClient.newCall(req).execute()) {
+                    respBody = resp.body() != null ? resp.body().string() : "{}";
+                }
+                @SuppressWarnings("unchecked")
+                Map<String, Object> syncResp = mapper.readValue(respBody, Map.class);
+                String pipeTaskId = (String) syncResp.get("taskId");
+                log.info("Pipeline task started: {}", pipeTaskId);
 
-                // ── Step 1: Crawl (0-30%) ──
-                task.stage = "crawl";
-                ProcessBuilder pb1 = new ProcessBuilder(PYTHON3, "scripts/crawl_policies.py");
-                pb1.directory(workDir);
-                if (!runAndTrack(pb1, task, 0, 30)) {
-                    task.status = "failed";
-                    task.error = "爬取政策页面失败";
-                    return;
+                // Poll pipeline status
+                long deadline = System.currentTimeMillis() + 600_000; // 10min timeout
+                while (System.currentTimeMillis() < deadline) {
+                    Thread.sleep(2000);
+                    Request statusReq = new Request.Builder()
+                            .url(PIPELINE_URL + "/pipeline/sync/" + pipeTaskId).get().build();
+                    String statusBody;
+                    try (Response resp = httpClient.newCall(statusReq).execute()) {
+                        statusBody = resp.body() != null ? resp.body().string() : "{}";
+                    }
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> st = mapper.readValue(statusBody, Map.class);
+                    String stStatus = (String) st.get("status");
+                    String stStage = (String) st.get("stage");
+                    Object stProgress = st.get("progress");
+                    
+                    task.stage = stStage != null ? stStage : task.stage;
+                    if (stProgress instanceof Number) {
+                        task.progress = Math.min(((Number) stProgress).intValue(), 90);
+                    }
+
+                    if ("failed".equals(stStatus)) {
+                        task.status = "failed";
+                        task.error = (String) st.getOrDefault("error", "Pipeline 失败");
+                        return;
+                    }
+                    if ("done".equals(stStatus)) break;
                 }
 
-                // ── Step 2: Extract clauses via DeepSeek LLM (30-80%) ──
-                task.stage = "extract";
-                ProcessBuilder pb2 = new ProcessBuilder(PYTHON3, "scripts/extract_clauses.py");
-                pb2.directory(workDir);
-                pb2.environment().put("DEEPSEEK_API_KEY", deepseekKey);
-                if (!runAndTrack(pb2, task, 30, 80)) {
-                    task.status = "failed";
-                    task.error = "条款提取失败";
-                    return;
-                }
-
-                // ── Step 3: Ingest — group clauses by document, save to PG+Milvus+MinIO (80-100%)
+                // ── Step 2: Ingest (90-100%) ──
                 task.stage = "ingest";
                 String dataDir = System.getProperty("user.home") + "/Documents/nanning-gjj-rag/data";
                 File clauseDir = new File(dataDir, "clauses");
                 File policyDir = new File(dataDir, "policies");
                 if (clauseDir.exists()) {
-                    java.io.File[] files = clauseDir.listFiles((d, name) -> name.endsWith(".json"));
+                    File[] files = clauseDir.listFiles((d, name) -> name.endsWith(".json"));
                     if (files != null) {
                         int total = files.length;
                         for (int i = 0; i < total; i++) {
                             try {
                                 @SuppressWarnings("unchecked")
-                                Map<String, Object> clauseData = mapper.readValue(files[i], Map.class);
-                                String docTitle = (String) clauseData.get("doc_title");
+                                Map<String, Object> cd = mapper.readValue(files[i], Map.class);
+                                String docTitle = (String) cd.get("doc_title");
                                 @SuppressWarnings("unchecked")
-                                java.util.List<Map<String, Object>> clauses =
-                                    (java.util.List<Map<String, Object>>) clauseData.get("clauses");
+                                List<Map<String, Object>> clauses = (List<Map<String, Object>>) cd.get("clauses");
                                 if (clauses == null || clauses.isEmpty()) continue;
 
-                                // Build full text from all clauses
                                 StringBuilder sb = new StringBuilder();
-                                String clauseNum = null;
                                 for (Map<String, Object> c : clauses) {
-                                    clauseNum = (String) c.get("clause_number");
-                                    String text = (String) c.get("text");
-                                    sb.append(text).append("\n");
+                                    sb.append((String) c.get("text")).append("\n");
                                 }
 
-                                // Save original HTML to MinIO
                                 String docId = files[i].getName().replace(".json", "");
-                                File htmlFile = new File(policyDir, docId + ".html");
-                                String minioPath = null;
-                                String filename = null;
+                                File mdFile = new File(policyDir + "/cleaned", docId + ".md");
+                                String minioPath = null, filename = null;
                                 long fsize = 0;
-                                if (htmlFile.exists()) {
-                                    filename = docTitle != null ? docTitle + ".html" : docId + ".html";
+                                if (mdFile.exists()) {
+                                    filename = (docTitle != null ? docTitle : docId) + ".md";
                                     minioPath = UUID.randomUUID() + "/" + filename;
-                                    java.nio.file.Files.copy(htmlFile.toPath(),
-                                            new java.io.FileOutputStream("/tmp/sync_upload.html"));
-                                    try (java.io.FileInputStream fis = new java.io.FileInputStream("/tmp/sync_upload.html")) {
-                                        minioService.upload(minioPath, fis, htmlFile.length(), "text/html");
-                                        fsize = htmlFile.length();
+                                    java.nio.file.Files.copy(mdFile.toPath(), new FileOutputStream("/tmp/sync_upload.md"));
+                                    try (FileInputStream fis = new FileInputStream("/tmp/sync_upload.md")) {
+                                        minioService.upload(minioPath, fis, mdFile.length(), "text/markdown");
+                                        fsize = mdFile.length();
                                     }
                                 }
-
-                                // Ingest to PG + Milvus
                                 documentService.ingestWithMinio(
-                                    docTitle != null ? docTitle : clauseNum,
-                                    sb.toString(), "SYNC", minioPath, filename, fsize);
-
+                                        docTitle != null ? docTitle : docId,
+                                        sb.toString(), "SYNC", minioPath, filename, fsize);
                             } catch (Exception e) {
-                                log.warn("Failed to ingest {}: {}", files[i].getName(), e.getMessage());
+                                log.warn("Ingest failed for {}: {}", files[i].getName(), e.getMessage());
                             }
-                            task.progress = 80 + (int)((i + 1) * 20.0 / total);
+                            task.progress = 90 + (int) ((i + 1) * 10.0 / total);
                         }
                     }
                 }
-
                 task.status = "done";
                 task.progress = 100;
             } catch (Exception e) {
-                log.error("Sync task {} failed", taskId, e);
-                SyncTask t = tasks.get(taskId);
-                if (t != null) {
-                    t.status = "failed";
-                    t.error = e.getMessage();
-                }
+                log.error("Sync failed", e);
+                task.status = "failed";
+                task.error = e.getMessage();
             }
         }).start();
-
         return taskId;
-    }
-
-    private boolean runAndTrack(ProcessBuilder pb, SyncTask task, int progressStart, int progressEnd)
-            throws Exception {
-        pb.redirectErrorStream(true);
-        Process p = pb.start();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.startsWith("{")) {
-                    try {
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> json = mapper.readValue(line, Map.class);
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> progress = (Map<String, Object>) json.get("progress");
-                        if (progress != null) {
-                            int current = ((Number) progress.get("current")).intValue();
-                            int total = ((Number) progress.get("total")).intValue();
-                            task.progress = progressStart + (int)((current * 1.0 / total) * (progressEnd - progressStart));
-                        }
-                    } catch (Exception ignored) {
-                        // not a JSON line — ignore
-                    }
-                }
-            }
-        }
-        int exitCode = p.waitFor();
-        return exitCode == 0;
     }
 
     public SyncTask getStatus(String taskId) {
