@@ -62,6 +62,65 @@ cp src/main/resources/application-example.yml src/main/resources/application.yml
 | `rag.similarity-threshold` | `0.5` | 相似度过滤阈值 |
 | `spring.servlet.multipart.max-file-size` | `50MB` | 上传文件大小上限 |
 
+## 统一响应格式
+
+所有 API 返回统一的 JSON 结构：
+
+```json
+{
+  "code": 200,
+  "msg": "success",
+  "data": { ... }
+}
+```
+
+### 错误码定义
+
+| HTTP Status | code | msg | 说明 |
+|---|---|---|---|
+| 200 | 200 | success | 请求成功 |
+| 201 | 200 | 文档入库成功 | 资源创建成功 |
+| 202 | 200 | 同步任务已创建 | 异步任务已提交 |
+| 400 | 400 | 参数校验失败 / 具体错误描述 | 客户端请求错误 |
+| 500 | 500 | 具体错误描述 / 服务器内部错误 | 服务端异常 |
+
+### 示例
+
+**成功响应（带数据）**
+
+```json
+{
+  "code": 200,
+  "msg": "success",
+  "data": {
+    "items": [...],
+    "total": 767,
+    "page": 1,
+    "size": 20
+  }
+}
+```
+
+**成功响应（无数据，如删除）**
+
+```json
+{
+  "code": 200,
+  "msg": "文档已删除",
+  "data": null
+}
+```
+
+**错误响应**
+
+```json
+{
+  "code": 400,
+  "msg": "参数校验失败",
+  "data": null
+}
+```
+
 ## 构建与运行
 
 ```bash
@@ -100,7 +159,7 @@ curl "http://localhost:8080/api/documents?page=1&size=20"
 curl "http://localhost:8080/api/documents?page=1&size=20&keyword=公积金"
 ```
 
-返回格式：`{"items":[...], "total":767, "page":1, "size":20}`
+返回格式：`{"code":200, "msg":"success", "data":{"items":[...], "total":767, "page":1, "size":20}}`
 
 **按 ID 查询**
 
@@ -180,7 +239,7 @@ curl -X POST http://localhost:8080/api/rag/feedback \
 |------|------|------|------|
 | postgres | postgres:16-alpine | 5432 | 文档元数据存储 |
 | minio | minio/minio:RELEASE.2024-05-28T17-19-04Z | 9000/9001 | 对象存储 + 控制台 |
-| etcd | quay.io/coreos/etcd:v3.5.25 | 2379 | Milvus 元数据协调 |
+| etcd | quay.io/coreos/etcd:v3.0.25 | 2379 | Milvus 元数据协调 |
 | milvus | milvusdb/milvus:v3.0-beta | 19530/9091 | 向量数据库 + 健康检查 |
 | neo4j | neo4j:5-community | 7474/7687 | 知识图谱 |
 | embedding | 本地构建 (Dockerfile.embedding) | 8002 | BGE-M3 文本向量化 |
