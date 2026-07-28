@@ -1,15 +1,37 @@
-# gjj-backend — 南宁公积金政策智能问答后端
+# rag-api — 南宁公积金政策智能问答后端
 
-Spring Boot 3.3.x RAG 服务（仓库名 `gjj-backend`），提供文档入库、向量检索、DeepSeek 生成回答、文件上传、同步管理等完整 API。
+Spring Boot 3.3.x RAG 服务，提供文档入库、向量检索、DeepSeek 生成回答、文件上传、同步管理等完整 API。
 
 ## 前置依赖
 
-- Java 17+
-- Maven 3.8+
-- [Milvus](https://milvus.io/) v2.4+（`localhost:19530`）
-- BGE-M3 Embedding 服务（`http://localhost:8002`，`POST /encode`）
-- DeepSeek API key
-- [Neo4j](https://neo4j.com/)（可选，知识图谱）
+| 依赖 | 说明 | 启动方式 |
+|------|------|----------|
+| PostgreSQL 16 | 文档元数据存储 | docker compose up -d postgres |
+| Milvus v3.0-beta | 向量存储与检索 | docker compose up -d milvus |
+| BGE-M3 Embedding | 文本向量化 (1024维) | docker compose up -d embedding |
+| Neo4j 5 | 知识图谱（可选） | docker compose up -d neo4j |
+| etcd + MinIO | Milvus 依赖 | docker compose 随 milvus 自动启动 |
+| DeepSeek API key | LLM 生成回答 | 配置在 `.env` 中 |
+
+> 以上所有 Docker 服务均通过项目内的 `docker-compose.yml` 统一编排，一条命令即可启动全部基础设施。
+
+## 快速启动（推荐）
+
+```bash
+# 1. 启动所有基础设施（PostgreSQL + Milvus + BGE-M3 + Neo4j + etcd + MinIO）
+docker compose up -d
+
+# 2. 等待服务就绪后启动 API
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+set -o allexport && source .env && set +o allexport
+./mvnw spring-boot:run
+```
+
+停止基础设施：
+
+```bash
+docker compose down
+```
 
 ## 环境变量
 
@@ -47,10 +69,10 @@ export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
 export DEEPSEEK_API_KEY=your_key_here
 
 # 构建
-./mvnw clean package -DskipTests -DfinalName=gjj-backend
+./mvnw clean package -DskipTests -DfinalName=rag-api
 
 # 运行
-java -jar target/gjj-backend.jar
+java -jar target/rag-api.jar
 
 # 或直接用 Maven
 ./mvnw spring-boot:run
@@ -147,7 +169,18 @@ curl -X POST http://localhost:8080/api/rag/feedback \
 ```
 文档入库: 文本 → 分块(ChunkingService) → 编码(EmbeddingService/BGE-M3) → 存入 Milvus
 问答检索: 问题 → 编码 → Milvus 余弦相似度检索(Top 5) → DeepSeek 生成回答
-文档管理: Milvus query/delete + 内存分页 + Tika 文件解析
+文档管理: PostgreSQL 存储元数据 + Milvus query/delete + 内存分页 + Tika 文件解析
 同步: ProcessBuilder 调用 Python 爬虫脚本
 知识图谱: Neo4j 存储政策引用关系
 ```
+
+## Docker 服务说明
+
+| 服务 | 镜像 | 端口 | 说明 |
+|------|------|------|------|
+| postgres | postgres:16-alpine | 5432 | 文档元数据存储 |
+| minio | minio/minio:RELEASE.2024-05-28T17-19-04Z | 9000/9001 | 对象存储 + 控制台 |
+| etcd | quay.io/coreos/etcd:v3.5.25 | 2379 | Milvus 元数据协调 |
+| milvus | milvusdb/milvus:v3.0-beta | 19530/9091 | 向量数据库 + 健康检查 |
+| neo4j | neo4j:5-community | 7474/7687 | 知识图谱 |
+| embedding | 本地构建 (Dockerfile.embedding) | 8002 | BGE-M3 文本向量化 |

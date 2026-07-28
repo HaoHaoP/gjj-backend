@@ -10,47 +10,56 @@ import java.util.List;
 @Service
 public class ChunkingService {
 
-    private static final int CHUNK_SIZE = 500;
-
-    public List<String> chunk(String text) {
-        List<String> chunks = new ArrayList<>();
-        if (text == null || text.isBlank()) {
-            return chunks;
+    public List<String> chunk(String text, int chunkSize, int overlapSize, String mode) {
+        if ("FIXED".equalsIgnoreCase(mode)) {
+            return fixedChunk(text, chunkSize, overlapSize);
         }
+        return sentenceChunk(text, chunkSize, overlapSize);
+    }
+
+    private List<String> sentenceChunk(String text, int chunkSize, int overlapSize) {
+        List<String> chunks = new ArrayList<>();
+        if (text == null || text.isBlank()) return chunks;
 
         int start = 0;
         while (start < text.length()) {
-            int end = Math.min(start + CHUNK_SIZE, text.length());
-            // Try to break at a sentence boundary near the end
+            int end = Math.min(start + chunkSize, text.length());
             if (end < text.length()) {
-                int breakPoint = findBreakPoint(text, start, end);
+                int breakPoint = findSentenceBreak(text, start, end);
                 chunks.add(text.substring(start, breakPoint).trim());
-                start = breakPoint;
+                start = Math.max(start, breakPoint - overlapSize);
             } else {
                 chunks.add(text.substring(start).trim());
                 break;
             }
         }
-
-        log.debug("Split text into {} chunks", chunks.size());
+        log.debug("Sentence chunk: {} chunks from {} chars", chunks.size(), text.length());
         return chunks;
     }
 
-    private int findBreakPoint(String text, int start, int preferredEnd) {
-        int end = preferredEnd;
-        // Look backwards for sentence-ending punctuation
-        for (int i = end; i > start; i--) {
+    private List<String> fixedChunk(String text, int chunkSize, int overlapSize) {
+        List<String> chunks = new ArrayList<>();
+        if (text == null || text.isBlank()) return chunks;
+
+        int start = 0;
+        while (start < text.length()) {
+            int end = Math.min(start + chunkSize, text.length());
+            chunks.add(text.substring(start, end).trim());
+            start = Math.max(start, end - overlapSize);
+            if (start >= text.length()) break;
+        }
+        log.debug("Fixed chunk: {} chunks", chunks.size());
+        return chunks;
+    }
+
+    private int findSentenceBreak(String text, int start, int preferredEnd) {
+        for (int i = preferredEnd; i > start; i--) {
             char c = text.charAt(i - 1);
-            if (c == '.' || c == '!' || c == '?' || c == '\n') {
-                return i;
-            }
+            if (c == '.' || c == '!' || c == '?' || c == '\n') return i;
         }
-        // Fall back to whitespace
-        for (int i = end; i > start; i--) {
-            if (Character.isWhitespace(text.charAt(i - 1))) {
-                return i;
-            }
+        for (int i = preferredEnd; i > start; i--) {
+            if (Character.isWhitespace(text.charAt(i - 1))) return i;
         }
-        return end;
+        return preferredEnd;
     }
 }

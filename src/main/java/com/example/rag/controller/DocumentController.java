@@ -1,7 +1,6 @@
 package com.example.rag.controller;
 
-import com.example.rag.model.DocumentResponse;
-import com.example.rag.model.IngestRequest;
+import com.example.rag.model.*;
 import com.example.rag.service.DocumentService;
 import com.example.rag.service.SyncService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -12,15 +11,14 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import java.io.IOException;
 
-import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @Slf4j
 @RestController
 @RequestMapping("/api/documents")
-@Tag(name = "Documents", description = "Document ingestion and management API")
+@Tag(name = "Documents", description = "Document management API")
 public class DocumentController {
 
     private final DocumentService documentService;
@@ -31,75 +29,108 @@ public class DocumentController {
         this.syncService = syncService;
     }
 
-    @PostMapping("/ingest")
-    @Operation(summary = "Ingest a document", description = "Split, embed, and store a document in Milvus")
-    public ResponseEntity<Map<String, Object>> ingest(@Valid @RequestBody IngestRequest request) {
-        int chunkCount = documentService.ingest(request.title(), request.content());
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(Map.of(
-                        "message", "Document ingested successfully",
-                        "chunks", chunkCount,
-                        "title", request.title()
-                ));
-    }
+    // ========== Document list & detail ==========
 
     @GetMapping
-    @Operation(summary = "List document chunks with pagination", description = "Retrieve chunks with pagination and optional keyword filter")
-    public ResponseEntity<Map<String, Object>> list(
+    @Operation(summary = "List documents", description = "List documents with pagination and optional keyword filter")
+    public ResponseEntity<Map<String, Object>> listDocuments(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) String keyword) {
-        List<Long> allIds = documentService.getAllIds();
-
-        // Filter by keyword if provided
-        if (keyword != null && !keyword.isBlank()) {
-            allIds = allIds.stream()
-                    .map(documentService::getById)
-                    .filter(d -> d != null)
-                    .filter(d -> d.title().contains(keyword) || d.chunkText().contains(keyword))
-                    .map(com.example.rag.model.DocumentResponse::id)
-                    .toList();
-        }
-
-        int total = allIds.size();
-        int from = (page - 1) * size;
-        int to = Math.min(from + size, total);
-        List<Long> pageIds = allIds.subList(Math.min(from, total), to);
-        List<DocumentResponse> items = documentService.getByIds(pageIds);
-
-        return ResponseEntity.ok(Map.of("items", items, "total", total, "page", page, "size", size));
+        return ResponseEntity.ok(documentService.listDocuments(page, size, keyword));
     }
 
-    @GetMapping("/{id}")
-    @Operation(summary = "Get document chunk by ID", description = "Retrieve a specific chunk by its ID")
-    public ResponseEntity<DocumentResponse> getById(@PathVariable long id) {
-        DocumentResponse doc = documentService.getById(id);
-        if (doc == null) {
-            return ResponseEntity.notFound().build();
-        }
-        return ResponseEntity.ok(doc);
+    @GetMapping("/{documentId}")
+    @Operation(summary = "Get document detail", description = "Get document metadata by its UUID")
+    public ResponseEntity<DocumentSummaryResponse> getDocument(@PathVariable String documentId) {
+        return ResponseEntity.ok(documentService.getDocument(documentId));
     }
 
-    @DeleteMapping("/{id}")
-    @Operation(summary = "Delete document chunk", description = "Delete a chunk by its ID")
-    public ResponseEntity<Void> deleteById(@PathVariable long id) {
-        documentService.deleteById(id);
+    @GetMapping("/{documentId}/chunks")
+    @Operation(summary = "List document chunks", description = "List chunks for a specific document")
+    public ResponseEntity<ChunkListResponse> listChunks(
+            @PathVariable String documentId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "50") int size) {
+        return ResponseEntity.ok(documentService.getDocumentChunks(documentId, page, size));
+    }
+
+    @GetMapping("/{documentId}/download")
+    @Operation(summary = "Download original file", description = "Get a presigned URL for the original document file")
+    public ResponseEntity<Map<String, String>> getDownloadUrl(@PathVariable String documentId) {
+        String url = documentService.getDownloadUrl(documentId);
+        return ResponseEntity.ok(Map.of("url", url));
+    }
+
+    // ========== Ingest ==========
+
+    @PostMapping("/ingest")
+    @Operation(summary = "Ingest document text", description = "Chunk, embed, and store document text")
+    public ResponseEntity<Map<String, Object>> ingest(@Valid @RequestBody IngestRequest request) {
+        Map<String, Object> result = documentService.ingest(
+                request.title(), request.content(), "MANUAL",
+                request.chunkSize(), request.overlapSize(), request.chunkMode());
+        return ResponseEntity.status(HttpStatus.CREATED).body(result);
+    }
+
+    @PostMapping("/upload")
+    @Operation(summary = "Upload document file", description = "Upload a file to parse and ingest")
+    public ResponseEntity<Map<String, Object>> upload(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam("title") String title,
+            @RequestParam(defaultValue = "500") int chunkSize,
+            @RequestParam(defaultValue = "0") int overlapSize,
+            @RequestParam(defaultValue = "SENTENCE") String chunkMode) {
+        try {
+            Map<String, Object> result = documentService.ingestFromFile(
+                    title, file.getInputStream(), file.getSize(),
+                    file.getContentType(), file.getOriginalFilename(),
+                    "UPLOAD", chunkSize, overlapSize, chunkMode);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("Failed to process uploaded file", e);
+            return ResponseEntity.badRequest().body(Map.of("error", "无法解析文件: " + e.getMessage()));
+        }
+    }
+
+    // ========== Delete ==========
+
+    @DeleteMapping("/{documentId}")
+    @Operation(summary = "Delete document", description = "Delete a document and all its chunks")
+    public ResponseEntity<Void> deleteDocument(@PathVariable String documentId) {
+        documentService.deleteDocument(documentId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/{documentId}/chunks/{chunkId}")
+    @Operation(summary = "Delete single chunk", description = "Delete a single chunk from a document")
+    public ResponseEntity<Void> deleteChunk(@PathVariable String documentId, @PathVariable long chunkId) {
+        documentService.deleteChunk(documentId, chunkId);
         return ResponseEntity.noContent().build();
     }
 
     @DeleteMapping("/batch")
-    @Operation(summary = "Batch delete document chunks", description = "Delete multiple chunks by their IDs")
-    public ResponseEntity<Map<String, Object>> deleteBatch(@RequestBody Map<String, List<Long>> body) {
-        List<Long> ids = body.get("ids");
-        int count = documentService.deleteBatch(ids);
+    @Operation(summary = "Batch delete documents", description = "Delete multiple documents by their UUIDs")
+    public ResponseEntity<Map<String, Object>> deleteBatch(@RequestBody Map<String, java.util.List<String>> body) {
+        java.util.List<String> ids = body.get("ids");
+        int count = 0;
+        for (String id : ids) {
+            try { documentService.deleteDocument(id); count++; } catch (Exception ignored) {}
+        }
         return ResponseEntity.ok(Map.of("deleted", count));
     }
 
+    // ========== Sync ==========
 
     @PostMapping("/sync")
-    @Operation(summary = "Sync documents", description = "Trigger crawl + extract pipeline")
-    public ResponseEntity<Map<String, String>> sync() {
-        String taskId = syncService.startSync();
+    @Operation(summary = "Sync documents", description = "Trigger crawl + extract pipeline with chunking params")
+    public ResponseEntity<Map<String, String>> sync(
+            @RequestParam(defaultValue = "500") int chunkSize,
+            @RequestParam(defaultValue = "0") int overlapSize,
+            @RequestParam(defaultValue = "SENTENCE") String chunkMode) {
+        // Clear previous sync documents
+        documentService.deleteBySource("SYNC");
+        String taskId = syncService.startSync(chunkSize, overlapSize, chunkMode);
         return ResponseEntity.accepted().body(Map.of("taskId", taskId, "status", "running"));
     }
 
@@ -108,20 +139,4 @@ public class DocumentController {
     public ResponseEntity<Map<String, String>> syncStatus(@PathVariable String taskId) {
         return ResponseEntity.ok(Map.of("status", syncService.getStatus(taskId)));
     }
-
-    @PostMapping("/upload")
-    @Operation(summary = "Upload document file", description = "Upload a file to ingest")
-    public ResponseEntity<Map<String, Object>> upload(
-            @RequestParam("file") MultipartFile file,
-            @RequestParam("title") String title) {
-        try {
-            String text = new org.apache.tika.Tika().parseToString(file.getInputStream());
-            int count = documentService.ingest(title, text);
-            return ResponseEntity.ok(Map.of("ingested", count, "title", title));
-        } catch (Exception e) {
-            log.error("Failed to parse uploaded file", e);
-            return ResponseEntity.badRequest().body(Map.of("error", "无法解析文件: " + e.getMessage()));
-        }
-    }
-
 }

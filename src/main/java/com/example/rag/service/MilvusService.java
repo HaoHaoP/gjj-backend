@@ -5,7 +5,6 @@ import com.example.rag.model.SearchHit;
 import io.milvus.client.MilvusServiceClient;
 import io.milvus.common.clientenum.ConsistencyLevelEnum;
 import io.milvus.grpc.*;
-import io.milvus.param.ConnectParam;
 import io.milvus.param.MetricType;
 import io.milvus.param.R;
 import io.milvus.param.RpcStatus;
@@ -29,7 +28,7 @@ import java.util.stream.Collectors;
 @Service
 public class MilvusService {
 
-    private static final String COLLECTION_NAME = "rag_documents";
+    private static final String COLLECTION_NAME = "rag_documents_v2";
     private static final int VECTOR_DIM = 1024;
 
     private final MilvusServiceClient milvusClient;
@@ -62,13 +61,19 @@ public class MilvusService {
         FieldType titleField = FieldType.newBuilder()
                 .withName("title")
                 .withDataType(DataType.VarChar)
-                .withMaxLength(256)
+                .withMaxLength(500)
                 .build();
 
         FieldType chunkTextField = FieldType.newBuilder()
                 .withName("chunk_text")
                 .withDataType(DataType.VarChar)
                 .withMaxLength(4096)
+                .build();
+
+        FieldType documentIdField = FieldType.newBuilder()
+                .withName("document_id")
+                .withDataType(DataType.VarChar)
+                .withMaxLength(36)
                 .build();
 
         FieldType embeddingField = FieldType.newBuilder()
@@ -79,27 +84,23 @@ public class MilvusService {
 
         CreateCollectionParam createParam = CreateCollectionParam.newBuilder()
                 .withCollectionName(COLLECTION_NAME)
-                .withDescription("RAG document chunks")
-                .withFieldTypes(List.of(idField, titleField, chunkTextField, embeddingField))
+                .withDescription("RAG document chunks v2 with document_id")
+                .withFieldTypes(List.of(idField, titleField, chunkTextField, documentIdField, embeddingField))
                 .build();
 
         R<RpcStatus> createResp = milvusClient.createCollection(createParam);
         handleResponse(createResp, "Failed to create collection");
         log.info("Created collection '{}'", COLLECTION_NAME);
 
-        // Create index on the vector field
         CreateIndexParam indexParam = CreateIndexParam.newBuilder()
                 .withCollectionName(COLLECTION_NAME)
                 .withFieldName("embedding")
                 .withIndexType(IndexType.AUTOINDEX)
                 .withMetricType(MetricType.COSINE)
                 .build();
-
         R<RpcStatus> indexResp = milvusClient.createIndex(indexParam);
         handleResponse(indexResp, "Failed to create index");
-        log.info("Created index on collection '{}'", COLLECTION_NAME);
 
-        // Load collection to memory
         R<RpcStatus> loadResp = milvusClient.loadCollection(LoadCollectionParam.newBuilder()
                 .withCollectionName(COLLECTION_NAME)
                 .build());
@@ -113,18 +114,19 @@ public class MilvusService {
         }
     }
 
-    public List<Long> insertChunks(List<String> titles, List<String> chunkTexts, List<List<Float>> embeddings) {
+    public List<Long> insertChunks(String documentId, List<String> titles, List<String> chunkTexts, List<List<Float>> embeddings) {
         List<String> titleList = titles.stream()
-                .map(t -> t.length() > 256 ? t.substring(0, 256) : t)
+                .map(t -> t.length() > 500 ? t.substring(0, 500) : t)
                 .toList();
-
         List<String> chunkList = chunkTexts.stream()
                 .map(t -> t.length() > 4096 ? t.substring(0, 4096) : t)
                 .toList();
+        List<String> docIdList = Collections.nCopies(titles.size(), documentId);
 
         List<InsertParam.Field> fields = new ArrayList<>();
         fields.add(new InsertParam.Field("title", titleList));
         fields.add(new InsertParam.Field("chunk_text", chunkList));
+        fields.add(new InsertParam.Field("document_id", docIdList));
         fields.add(new InsertParam.Field("embedding", embeddings));
 
         InsertParam insertParam = InsertParam.newBuilder()
@@ -139,13 +141,12 @@ public class MilvusService {
 
         MutationResult result = insertResp.getData();
         List<Long> ids = result.getIDs().getIntId().getDataList();
-        log.info("Inserted {} chunks into Milvus", ids.size());
+        log.info("Inserted {} chunks into Milvus for doc {}", ids.size(), documentId);
         return ids;
     }
 
     public List<SearchHit> searchSimilar(List<Float> queryEmbedding, int topK) {
-        List<String> queryFields = List.of("id", "title", "chunk_text");
-
+        List<String> queryFields = List.of("id", "title", "chunk_text", "document_id");
         SearchParam searchParam = SearchParam.newBuilder()
                 .withCollectionName(COLLECTION_NAME)
                 .withMetricType(MetricType.COSINE)
@@ -171,64 +172,63 @@ public class MilvusService {
             long id = idScore.getLongID();
             double score = idScore.getScore();
 
-            // Extract field values using index-based access
             String title = "";
             String chunkText = "";
+            String docId = "";
             try {
                 List<?> titleData = wrapper.getFieldData("title", 0);
-                if (titleData != null && i < titleData.size()) {
-                    title = String.valueOf(titleData.get(i));
-                }
+                if (titleData != null && i < titleData.size()) title = String.valueOf(titleData.get(i));
                 List<?> chunkData = wrapper.getFieldData("chunk_text", 0);
-                if (chunkData != null && i < chunkData.size()) {
-                    chunkText = String.valueOf(chunkData.get(i));
-                }
+                if (chunkData != null && i < chunkData.size()) chunkText = String.valueOf(chunkData.get(i));
+                List<?> docIdData = wrapper.getFieldData("document_id", 0);
+                if (docIdData != null && i < docIdData.size()) docId = String.valueOf(docIdData.get(i));
             } catch (Exception e) {
                 log.warn("Failed to extract field data from search result", e);
             }
 
             hits.add(new SearchHit(id, title, chunkText, score));
         }
-
         return hits;
     }
 
     public List<DocumentResponse> listAll() {
-        String expr = "id >= 0";
-        R<QueryResults> queryResp = milvusClient.query(QueryParam.newBuilder()
-                .withCollectionName(COLLECTION_NAME)
-                .withExpr(expr)
-                .withOutFields(List.of("id", "title", "chunk_text"))
-                .withConsistencyLevel(ConsistencyLevelEnum.EVENTUALLY)
-                .build());
+        return queryByExpr("id >= 0", List.of("id", "title", "chunk_text", "document_id"));
+    }
 
-        if (queryResp.getException() != null) {
-            throw new RuntimeException("Query failed: " + queryResp.getException().getMessage());
-        }
-
-        QueryResults results = queryResp.getData();
-        return extractDocumentList(results);
+    public List<DocumentResponse> listByDocumentId(String documentId) {
+        return queryByExpr("document_id == \"" + documentId + "\"",
+                List.of("id", "title", "chunk_text", "document_id"));
     }
 
     public DocumentResponse getById(long id) {
-        String expr = "id == " + id;
-        R<QueryResults> queryResp = milvusClient.query(QueryParam.newBuilder()
-                .withCollectionName(COLLECTION_NAME)
-                .withExpr(expr)
-                .withOutFields(List.of("id", "title", "chunk_text"))
-                .withConsistencyLevel(ConsistencyLevelEnum.EVENTUALLY)
-                .build());
-
-        if (queryResp.getException() != null) {
-            throw new RuntimeException("Query failed: " + queryResp.getException().getMessage());
-        }
-
-        List<DocumentResponse> docs = extractDocumentList(queryResp.getData());
+        List<DocumentResponse> docs = queryByExpr("id == " + id,
+                List.of("id", "title", "chunk_text", "document_id"));
         return docs.isEmpty() ? null : docs.get(0);
     }
 
     public void deleteById(long id) {
-        String expr = "id == " + id;
+        deleteByExpr("id == " + id);
+    }
+
+    public void deleteByDocumentId(String documentId) {
+        deleteByExpr("document_id == \"" + documentId + "\"");
+    }
+
+    private List<DocumentResponse> queryByExpr(String expr, List<String> outFields) {
+        R<QueryResults> queryResp = milvusClient.query(QueryParam.newBuilder()
+                .withCollectionName(COLLECTION_NAME)
+                .withExpr(expr)
+                .withOutFields(outFields)
+                .withConsistencyLevel(ConsistencyLevelEnum.EVENTUALLY)
+                .build());
+
+        if (queryResp.getException() != null) {
+            throw new RuntimeException("Query failed: " + queryResp.getException().getMessage());
+        }
+        return extractDocumentList(queryResp.getData());
+    }
+
+    private void deleteByExpr(String expr) {
         R<MutationResult> deleteResp = milvusClient.delete(DeleteParam.newBuilder()
                 .withCollectionName(COLLECTION_NAME)
                 .withExpr(expr)
@@ -237,27 +237,24 @@ public class MilvusService {
         if (deleteResp.getException() != null) {
             throw new RuntimeException("Delete failed: " + deleteResp.getException().getMessage());
         }
-        log.info("Deleted document with id={}", id);
     }
 
     private List<DocumentResponse> extractDocumentList(QueryResults results) {
         List<DocumentResponse> docs = new ArrayList<>();
-
         var fieldsList = results.getFieldsDataList();
-        if (fieldsList.isEmpty()) {
-            return docs;
-        }
+        if (fieldsList.isEmpty()) return docs;
 
-        // Extract the three fields
         List<Long> idList = new ArrayList<>();
         List<String> titleList = new ArrayList<>();
         List<String> chunkList = new ArrayList<>();
+        List<String> docIdList = new ArrayList<>();
 
         for (var field : fieldsList) {
             switch (field.getFieldName()) {
                 case "id" -> idList.addAll(field.getScalars().getLongData().getDataList());
                 case "title" -> titleList.addAll(field.getScalars().getStringData().getDataList());
                 case "chunk_text" -> chunkList.addAll(field.getScalars().getStringData().getDataList());
+                case "document_id" -> docIdList.addAll(field.getScalars().getStringData().getDataList());
             }
         }
 
@@ -268,31 +265,7 @@ public class MilvusService {
             String chunk = i < chunkList.size() ? chunkList.get(i) : "";
             docs.add(new DocumentResponse(id, title, chunk));
         }
-
         return docs;
-    }
-
-
-    public List<Long> getAllIds() {
-        String expr = "id >= 0";
-        R<QueryResults> queryResp = milvusClient.query(QueryParam.newBuilder()
-                .withCollectionName(COLLECTION_NAME)
-                .withExpr(expr)
-                .withOutFields(List.of("id"))
-                .withConsistencyLevel(ConsistencyLevelEnum.EVENTUALLY)
-                .build());
-
-        if (queryResp.getException() != null) {
-            throw new RuntimeException("Query failed: " + queryResp.getException().getMessage());
-        }
-
-        List<Long> ids = new ArrayList<>();
-        for (var field : queryResp.getData().getFieldsDataList()) {
-            if ("id".equals(field.getFieldName())) {
-                ids.addAll(field.getScalars().getLongData().getDataList());
-            }
-        }
-        return ids;
     }
 
     @PreDestroy

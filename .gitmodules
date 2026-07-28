@@ -1,0 +1,3 @@
+[submodule "models/bge-m3"]
+	path = models/bge-m3
+	url = https://huggingface.co/BAAI/bge-m3
