@@ -134,12 +134,7 @@ public class DocumentController {
 
     @PostMapping("/sync")
     @Operation(summary = "Sync documents", description = "Trigger crawl + extract pipeline with chunking params")
-    public ResponseEntity<ApiResponse<Map<String, String>>> sync(
-            @RequestParam(defaultValue = "500") int chunkSize,
-            @RequestParam(defaultValue = "0") int overlapSize,
-            @RequestParam(defaultValue = "SENTENCE") String chunkMode) {
-        // Clear previous sync documents
-        documentService.deleteBySource("SYNC");
+    public ResponseEntity<ApiResponse<Map<String, String>>> sync() {
         String taskId = syncService.startSync();
         return ResponseEntity.accepted().body(ApiResponse.ok(Map.of("taskId", taskId, "status", "running"), "同步任务已创建"));
     }

@@ -158,6 +158,14 @@ public class DocumentService {
 
     @Transactional
     public void deleteDocument(String documentId) {
+        // Delete MinIO objects first
+        DocumentEntity doc = documentRepository.findByDocumentId(documentId).orElse(null);
+        if (doc != null && doc.getMinioPath() != null) {
+            try {
+                String prefix = doc.getMinioPath().substring(0, doc.getMinioPath().indexOf('/') + 1);
+                minioService.deletePrefix(prefix);
+            } catch (Exception e) { log.warn("MinIO delete failed: {}", e.getMessage()); }
+        }
         milvusService.deleteByDocumentId(documentId);
         chunkRepository.deleteByDocumentId(documentId);
         documentRepository.deleteByDocumentId(documentId);
@@ -174,21 +182,6 @@ public class DocumentService {
         doc.setUpdatedAt(LocalDateTime.now());
         documentRepository.save(doc);
     }
-
-    @Transactional
-    public int deleteBySource(String source) {
-        List<DocumentEntity> docs = documentRepository.findAll()
-                .stream().filter(d -> source.equals(d.getSource())).toList();
-        for (DocumentEntity d : docs) {
-            milvusService.deleteByDocumentId(d.getDocumentId());
-            chunkRepository.deleteByDocumentId(d.getDocumentId());
-            documentRepository.delete(d);
-        }
-        log.info("Deleted {} documents with source={}", docs.size(), source);
-        return docs.size();
-    }
-
-    // ========== Legacy compat ==========
 
     public DocumentResponse getById(long id) {
         return milvusService.getById(id);

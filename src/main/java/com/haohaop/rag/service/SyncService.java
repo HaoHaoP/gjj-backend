@@ -36,7 +36,6 @@ public class SyncService {
         tasks.put(taskId, task);
 
         new Thread(() -> {
-            try { documentService.deleteBySource("SYNC"); } catch (Exception ignored) {}
             try {
                 // ── Step 1: Call pipeline (crawl+extract, 0-90%) ──
                 task.stage = "crawl+extract";
@@ -54,7 +53,8 @@ public class SyncService {
                 log.info("Pipeline task started: {}", pipeTaskId);
 
                 // Poll pipeline status
-                long deadline = System.currentTimeMillis() + 600_000; // 10min timeout
+                long deadline = System.currentTimeMillis() + 600_000;
+                Map<String, Object> pipelineResult = null;
                 while (System.currentTimeMillis() < deadline) {
                     Thread.sleep(2000);
                     Request statusReq = new Request.Builder()
@@ -79,53 +79,49 @@ public class SyncService {
                         task.error = (String) st.getOrDefault("error", "Pipeline 失败");
                         return;
                     }
-                    if ("done".equals(stStatus)) break;
+                    if ("done".equals(stStatus)) { pipelineResult = st; break; }
                 }
 
-                // ── Step 2: Ingest (90-100%) ──
+                // ── Step 2: Ingest from MinIO (90-100%) ──
                 task.stage = "ingest";
-                String dataDir = System.getProperty("user.home") + "/Documents/nanning-gjj-rag/data";
-                File clauseDir = new File(dataDir, "clauses");
-                File policyDir = new File(dataDir, "policies");
-                if (clauseDir.exists()) {
-                    File[] files = clauseDir.listFiles((d, name) -> name.endsWith(".json"));
-                    if (files != null) {
-                        int total = files.length;
-                        for (int i = 0; i < total; i++) {
-                            try {
-                                @SuppressWarnings("unchecked")
-                                Map<String, Object> cd = mapper.readValue(files[i], Map.class);
-                                String docTitle = (String) cd.get("doc_title");
-                                @SuppressWarnings("unchecked")
-                                List<Map<String, Object>> clauses = (List<Map<String, Object>>) cd.get("clauses");
-                                if (clauses == null || clauses.isEmpty()) continue;
-
-                                StringBuilder sb = new StringBuilder();
-                                for (Map<String, Object> c : clauses) {
-                                    sb.append((String) c.get("text")).append("\n");
-                                }
-
-                                String docId = files[i].getName().replace(".json", "");
-                                File mdFile = new File(policyDir + "/cleaned", docId + ".md");
-                                String minioPath = null, filename = null;
-                                long fsize = 0;
-                                if (mdFile.exists()) {
-                                    filename = (docTitle != null ? docTitle : docId) + ".md";
-                                    minioPath = UUID.randomUUID() + "/" + filename;
-                                    java.nio.file.Files.copy(mdFile.toPath(), new FileOutputStream("/tmp/sync_upload.md"));
-                                    try (FileInputStream fis = new FileInputStream("/tmp/sync_upload.md")) {
-                                        minioService.upload(minioPath, fis, mdFile.length(), "text/markdown");
-                                        fsize = mdFile.length();
-                                    }
-                                }
-                                documentService.ingestWithMinio(
-                                        docTitle != null ? docTitle : docId,
-                                        sb.toString(), "SYNC", minioPath, filename, fsize);
-                            } catch (Exception e) {
-                                log.warn("Ingest failed for {}: {}", files[i].getName(), e.getMessage());
+                
+                @SuppressWarnings("unchecked")
+                List<Map<String, String>> articles = (List<Map<String, String>>) pipelineResult.get("articles");
+                if (articles != null) {
+                    int total = articles.size();
+                    for (int i = 0; i < total; i++) {
+                        try {
+                            Map<String, String> a = articles.get(i);
+                            String docId = a.get("doc_id");
+                            String title = a.get("title");
+                            String minioPath = a.get("minio_path");
+                            String crawlStatus = a.get("crawl_status");
+                            
+                            // Skip articles already ingested or failed to crawl
+                            if ("skipped".equals(crawlStatus) || "failed".equals(crawlStatus)) {
+                                continue;
                             }
-                            task.progress = 90 + (int) ((i + 1) * 10.0 / total);
+                            if (minioPath == null || minioPath.isEmpty()) {
+                                continue;
+                            }
+                            
+                            // Download MD file from MinIO, use as content for chunking
+                            byte[] mdBytes = minioService.download(minioPath).readAllBytes();
+                            String mdContent = new String(mdBytes, java.nio.charset.StandardCharsets.UTF_8);
+
+                            // Get MD file size from MinIO
+                            long fsize = mdBytes.length;
+                            try {
+                                fsize = minioService.fileSize(minioPath);
+                            } catch (Exception ignored) {}
+
+                            documentService.ingestWithMinio(
+                                    title, mdContent, "SYNC", minioPath,
+                                    title + ".md", fsize);
+                        } catch (Exception e) {
+                            log.warn("Ingest failed: {}", e.getMessage());
                         }
+                        task.progress = 90 + (int) ((i + 1) * 10.0 / total);
                     }
                 }
                 task.status = "done";

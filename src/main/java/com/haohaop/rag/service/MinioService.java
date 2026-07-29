@@ -73,10 +73,25 @@ public class MinioService {
                 .build());
     }
 
+    public long fileSize(String objectName) throws Exception {
+        return minioClient.statObject(StatObjectArgs.builder()
+                .bucket(bucket)
+                .object(objectName)
+                .build()).size();
+    }
+
     public void delete(String objectName) throws Exception {
         minioClient.removeObject(RemoveObjectArgs.builder()
                 .bucket(bucket)
                 .object(objectName)
                 .build());
+    }
+
+    public void deletePrefix(String prefix) throws Exception {
+        for (var item : minioClient.listObjects(ListObjectsArgs.builder()
+                .bucket(bucket).prefix(prefix).recursive(true).build())) {
+            minioClient.removeObject(RemoveObjectArgs.builder()
+                    .bucket(bucket).object(item.get().objectName()).build());
+        }
     }
 }
