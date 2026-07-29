@@ -119,7 +119,7 @@ public class DocumentService {
     @Transactional
     public Map<String, Object> ingestWithMinio(String title, String content, String source,
                                                 String minioPath, String originalFilename, long fileSize) {
-        return ingestInternal(title, content, minioPath, originalFilename, fileSize, source, 500, 0, "SENTENCE");
+        return ingestInternal(title, content, minioPath, originalFilename, fileSize, source, 500, 0, "CLAUSE");
     }
 
     private Map<String, Object> ingestInternal(String title, String content,

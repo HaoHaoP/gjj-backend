@@ -125,7 +125,7 @@ public class SyncService {
                             } catch (Exception ignored) {}
 
                             documentService.ingestWithMinio(
-                                    title, mdContent, "SYNC", minioPath,
+                                    title, mdContent, "PIPELINE", minioPath,
                                     title + ".md", fsize);
                         } catch (Exception e) {
                             log.warn("Ingest failed: {}", e.getMessage());
