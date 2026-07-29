@@ -3,6 +3,7 @@ package com.haohaop.rag.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.*;
@@ -13,7 +14,8 @@ import java.util.concurrent.*;
 @Service
 public class SyncService {
 
-    private static final String PIPELINE_URL = "http://localhost:8001";
+    @Value("${pipeline.url:http://localhost:8001}")
+    private String pipelineUrl;
     private final DocumentService documentService;
     private final MinioService minioService;
     private final Map<String, SyncTask> tasks = new ConcurrentHashMap<>();
@@ -28,7 +30,7 @@ public class SyncService {
         this.minioService = minioService;
     }
 
-    public String startSync() {
+   public String startSync() {
         String taskId = UUID.randomUUID().toString();
         SyncTask task = new SyncTask();
         task.status = "running";
@@ -39,10 +41,10 @@ public class SyncService {
             try {
                 // ── Step 1: Call pipeline (crawl+extract, 0-90%) ──
                 task.stage = "crawl+extract";
-                log.info("Calling pipeline: POST {}/pipeline/sync", PIPELINE_URL);
+                log.info("Calling pipeline: POST {}/pipeline/sync", pipelineUrl);
                 
                 RequestBody emptyBody = RequestBody.create("", MediaType.parse("application/json"));
-                Request req = new Request.Builder().url(PIPELINE_URL + "/pipeline/sync").post(emptyBody).build();
+                Request req = new Request.Builder().url(pipelineUrl + "/pipeline/sync").post(emptyBody).build();
                 String respBody;
                 try (Response resp = httpClient.newCall(req).execute()) {
                     respBody = resp.body() != null ? resp.body().string() : "{}";
@@ -58,7 +60,7 @@ public class SyncService {
                 while (System.currentTimeMillis() < deadline) {
                     Thread.sleep(2000);
                     Request statusReq = new Request.Builder()
-                            .url(PIPELINE_URL + "/pipeline/sync/" + pipeTaskId).get().build();
+                            .url(pipelineUrl + "/pipeline/sync/" + pipeTaskId).get().build();
                     String statusBody;
                     try (Response resp = httpClient.newCall(statusReq).execute()) {
                         statusBody = resp.body() != null ? resp.body().string() : "{}";
@@ -85,6 +87,11 @@ public class SyncService {
                 // ── Step 2: Ingest from MinIO (90-100%) ──
                 task.stage = "ingest";
                 
+                if (pipelineResult == null) {
+                    task.status = "failed";
+                    task.error = "Pipeline 超时";
+                    return;
+                }
                 @SuppressWarnings("unchecked")
                 List<Map<String, String>> articles = (List<Map<String, String>>) pipelineResult.get("articles");
                 if (articles != null) {
@@ -92,7 +99,6 @@ public class SyncService {
                     for (int i = 0; i < total; i++) {
                         try {
                             Map<String, String> a = articles.get(i);
-                            String docId = a.get("doc_id");
                             String title = a.get("title");
                             String minioPath = a.get("minio_path");
                             String crawlStatus = a.get("crawl_status");
@@ -106,7 +112,10 @@ public class SyncService {
                             }
                             
                             // Download MD file from MinIO, use as content for chunking
-                            byte[] mdBytes = minioService.download(minioPath).readAllBytes();
+                            byte[] mdBytes;
+                            try (InputStream is = minioService.download(minioPath)) {
+                                mdBytes = is.readAllBytes();
+                            }
                             String mdContent = new String(mdBytes, java.nio.charset.StandardCharsets.UTF_8);
 
                             // Get MD file size from MinIO
