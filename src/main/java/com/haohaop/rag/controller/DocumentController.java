@@ -65,10 +65,11 @@ public class DocumentController {
     // ========== Ingest ==========
 
     @PostMapping("/ingest")
-    @Operation(summary = "Ingest document text", description = "Chunk, embed, and store document text")
+    @Operation(summary = "Ingest document text", description = "Chunk, embed, and store document text. Optionally writes to MinIO if minioPath is provided.")
     public ResponseEntity<ApiResponse<Map<String, Object>>> ingest(@Valid @RequestBody IngestRequest request) {
         Map<String, Object> result = documentService.ingest(
-                request.title(), request.content(), "MANUAL",
+                request.title(), request.content(), request.source(),
+                request.minioPath(), request.originalFilename(),
                 request.chunkSize(), request.overlapSize(), request.chunkMode());
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(result, "文档入库成功"));
     }

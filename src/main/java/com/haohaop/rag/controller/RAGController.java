@@ -1,6 +1,6 @@
 package com.haohaop.rag.controller;
 
-import com.haohaop.rag.model.FeedbackRequest;
+import com.haohaop.rag.model.ApiResponse;
 import com.haohaop.rag.model.QueryRequest;
 import com.haohaop.rag.model.QueryResponse;
 import com.haohaop.rag.service.RAGService;
@@ -8,34 +8,35 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
-import com.haohaop.rag.model.ApiResponse;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @Slf4j
 @RestController
 @RequestMapping("/api/rag")
-@Tag(name = "RAG Query", description = "RAG question-answering API")
-public class RAGController {
+@Tag(name = "RAG", description = "RAG Q&A API")
+public class RagController {
 
     private final RAGService ragService;
 
-    public RAGController(RAGService ragService) {
+    public RagController(RAGService ragService) {
         this.ragService = ragService;
     }
 
     @PostMapping("/query")
-    @Operation(summary = "Ask a question", description = "Query the RAG system with a natural language question")
+    @Operation(summary = "Ask a policy question")
     public ResponseEntity<ApiResponse<QueryResponse>> query(@Valid @RequestBody QueryRequest request) {
-        QueryResponse response = ragService.query(request.question());
-        return ResponseEntity.ok(ApiResponse.ok(response));
+        QueryResponse result = ragService.query(request.question());
+        return ResponseEntity.ok(ApiResponse.ok(result));
     }
 
-    @PostMapping("/feedback")
-    @Operation(summary = "Submit feedback", description = "Submit user feedback on answer")
-    public ResponseEntity<ApiResponse<Void>> feedback(@RequestBody FeedbackRequest req) {
-        log.info("Feedback: rating={}, question={}", req.rating(),
-                req.question().substring(0, Math.min(50, req.question().length())));
-        return ResponseEntity.ok(ApiResponse.ok("反馈已提交"));
+    @PostMapping(value = "/query/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @Operation(summary = "Ask a policy question with streaming response")
+    public SseEmitter queryStream(@Valid @RequestBody QueryRequest request) {
+        SseEmitter emitter = new SseEmitter(300_000L);
+        new Thread(() -> ragService.askStream(request.question(), request.deepThinking(), emitter)).start();
+        return emitter;
     }
 }

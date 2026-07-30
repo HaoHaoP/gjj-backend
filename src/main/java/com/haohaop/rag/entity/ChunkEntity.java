@@ -40,10 +40,17 @@ public class ChunkEntity {
     }
 
     public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
     public String getDocumentId() { return documentId; }
+    public void setDocumentId(String documentId) { this.documentId = documentId; }
     public int getChunkIndex() { return chunkIndex; }
+    public void setChunkIndex(int chunkIndex) { this.chunkIndex = chunkIndex; }
     public String getText() { return text; }
+    public void setText(String text) { this.text = text; }
     public String getClauseNumber() { return clauseNumber; }
+    public void setClauseNumber(String clauseNumber) { this.clauseNumber = clauseNumber; }
     public String getParentTitle() { return parentTitle; }
+    public void setParentTitle(String parentTitle) { this.parentTitle = parentTitle; }
     public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }

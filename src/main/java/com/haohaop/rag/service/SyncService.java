@@ -5,8 +5,8 @@ import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
-import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -17,20 +17,34 @@ public class SyncService {
     @Value("${pipeline.url:http://localhost:8001}")
     private String pipelineUrl;
     private final DocumentService documentService;
-    private final MinioService minioService;
+    private final KnowledgeGraphService knowledgeGraphService;
+    private final OkHttpClient httpClient;
+    
+    /** Polling interval in ms between pipeline status checks. Package-private for tests. */
+    long pollIntervalMs = 2000;
     private final Map<String, SyncTask> tasks = new ConcurrentHashMap<>();
     private final ObjectMapper mapper = new ObjectMapper();
-    private final OkHttpClient httpClient = new OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(600, TimeUnit.SECONDS)
-            .build();
 
-    public SyncService(DocumentService documentService, MinioService minioService) {
-        this.documentService = documentService;
-        this.minioService = minioService;
+    /** Production constructor — creates a default OkHttpClient. */
+    @Autowired
+    public SyncService(DocumentService documentService,
+                        KnowledgeGraphService knowledgeGraphService) {
+        this(documentService, knowledgeGraphService,
+                new OkHttpClient.Builder()
+                        .connectTimeout(10, TimeUnit.SECONDS)
+                        .readTimeout(600, TimeUnit.SECONDS)
+                        .build());
     }
 
-   public String startSync() {
+    /** Constructor with injectable OkHttpClient (for testing). */
+    SyncService(DocumentService documentService,
+                 KnowledgeGraphService knowledgeGraphService, OkHttpClient httpClient) {
+        this.documentService = documentService;
+        this.knowledgeGraphService = knowledgeGraphService;
+        this.httpClient = httpClient;
+    }
+
+    public String startSync() {
         String taskId = UUID.randomUUID().toString();
         SyncTask task = new SyncTask();
         task.status = "running";
@@ -39,10 +53,10 @@ public class SyncService {
 
         new Thread(() -> {
             try {
-                // ── Step 1: Call pipeline (crawl+extract, 0-90%) ──
+                // ── Step 1: Call pipeline (extract now ingests via API, 0-85%) ──
                 task.stage = "crawl+extract";
                 log.info("Calling pipeline: POST {}/pipeline/sync", pipelineUrl);
-                
+
                 RequestBody emptyBody = RequestBody.create("", MediaType.parse("application/json"));
                 Request req = new Request.Builder().url(pipelineUrl + "/pipeline/sync").post(emptyBody).build();
                 String respBody;
@@ -54,11 +68,10 @@ public class SyncService {
                 String pipeTaskId = (String) syncResp.get("taskId");
                 log.info("Pipeline task started: {}", pipeTaskId);
 
-                // Poll pipeline status
                 long deadline = System.currentTimeMillis() + 600_000;
                 Map<String, Object> pipelineResult = null;
                 while (System.currentTimeMillis() < deadline) {
-                    Thread.sleep(2000);
+                    Thread.sleep(pollIntervalMs);
                     Request statusReq = new Request.Builder()
                             .url(pipelineUrl + "/pipeline/sync/" + pipeTaskId).get().build();
                     String statusBody;
@@ -70,10 +83,10 @@ public class SyncService {
                     String stStatus = (String) st.get("status");
                     String stStage = (String) st.get("stage");
                     Object stProgress = st.get("progress");
-                    
+
                     task.stage = stStage != null ? stStage : task.stage;
                     if (stProgress instanceof Number) {
-                        task.progress = Math.min(((Number) stProgress).intValue(), 90);
+                        task.progress = Math.min(((Number) stProgress).intValue(), 85);
                     }
 
                     if ("failed".equals(stStatus)) {
@@ -84,55 +97,27 @@ public class SyncService {
                     if ("done".equals(stStatus)) { pipelineResult = st; break; }
                 }
 
-                // ── Step 2: Ingest from MinIO (90-100%) ──
-                task.stage = "ingest";
-                
                 if (pipelineResult == null) {
                     task.status = "failed";
                     task.error = "Pipeline 超时";
                     return;
                 }
-                @SuppressWarnings("unchecked")
-                List<Map<String, String>> articles = (List<Map<String, String>>) pipelineResult.get("articles");
-                if (articles != null) {
-                    int total = articles.size();
-                    for (int i = 0; i < total; i++) {
-                        try {
-                            Map<String, String> a = articles.get(i);
-                            String title = a.get("title");
-                            String minioPath = a.get("minio_path");
-                            String crawlStatus = a.get("crawl_status");
-                            
-                            // Skip articles already ingested or failed to crawl
-                            if ("skipped".equals(crawlStatus) || "failed".equals(crawlStatus)) {
-                                continue;
-                            }
-                            if (minioPath == null || minioPath.isEmpty()) {
-                                continue;
-                            }
-                            
-                            // Download MD file from MinIO, use as content for chunking
-                            byte[] mdBytes;
-                            try (InputStream is = minioService.download(minioPath)) {
-                                mdBytes = is.readAllBytes();
-                            }
-                            String mdContent = new String(mdBytes, java.nio.charset.StandardCharsets.UTF_8);
 
-                            // Get MD file size from MinIO
-                            long fsize = mdBytes.length;
-                            try {
-                                fsize = minioService.fileSize(minioPath);
-                            } catch (Exception ignored) {}
-
-                            documentService.ingestWithMinio(
-                                    title, mdContent, "PIPELINE", minioPath,
-                                    title + ".md", fsize);
-                        } catch (Exception e) {
-                            log.warn("Ingest failed: {}", e.getMessage());
-                        }
-                        task.progress = 90 + (int) ((i + 1) * 10.0 / total);
-                    }
+                // ── Step 2: Build Knowledge Graph (85-100%) ──
+                task.stage = "knowledge-graph";
+                task.progress = 85;
+                log.info("Starting knowledge graph build...");
+                try {
+                    Map<String, Object> kgResult = knowledgeGraphService.buildAll();
+                    log.info("Knowledge graph built: {}", kgResult);
+                    task.kgResult = kgResult;
+                } catch (Exception e) {
+                    log.error("Knowledge graph build failed", e);
+                    task.status = "failed";
+                    task.error = "KG build failed: " + e.getMessage();
+                    return;
                 }
+
                 task.status = "done";
                 task.progress = 100;
             } catch (Exception e) {
@@ -153,5 +138,6 @@ public class SyncService {
         public int progress;
         public String stage;
         public String error;
+        public Map<String, Object> kgResult;
     }
 }

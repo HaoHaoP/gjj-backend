@@ -9,6 +9,9 @@ import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 @Slf4j
 @Service
 public class RAGService {
@@ -54,6 +57,7 @@ public class RAGService {
     private final EmbeddingService embeddingService;
     private final MilvusService milvusService;
     private final DeepSeekService deepSeekService;
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private final Neo4jService neo4jService;
 
     private final double similarityThreshold;
@@ -162,6 +166,142 @@ public class RAGService {
                 sourceInfoList.size(), kgRelations.size(), rejected);
 
         return new QueryResponse(answer, sourceInfoList, rejected, kgRelations);
+    }
+
+    /**
+     * Streaming version: RAG retrieval + SSE token-by-token response + follow-up suggestions.
+     */
+    public void askStream(String question, boolean deepThinking, SseEmitter emitter) {
+        try {
+            // Step 1-5: Same RAG retrieval as query()
+            List<List<Float>> embeddings = embeddingService.encode(List.of(question));
+            List<Float> queryEmbedding = embeddings.get(0);
+            List<SearchHit> similarDocs = milvusService.searchSimilar(queryEmbedding, TOP_K);
+
+            if (similarDocs.isEmpty() || similarDocs.get(0).score() < similarityThreshold) {
+                String fallback = "您咨询的问题在南宁住房公积金现行政策中未找到明确规定。建议您核实问题后重新提问，或拨打南宁公积金服务热线 12329 咨询。";
+                emitter.send(SseEmitter.event().name("token").data(objectMapper.writeValueAsString(fallback)));
+                emitter.send(SseEmitter.event().name("sources").data("[]"));
+                emitter.send(SseEmitter.event().name("suggestions").data("[]"));
+                emitter.send(SseEmitter.event().name("done").data(""));
+                emitter.complete();
+                return;
+            }
+
+            List<KgRelation> kgRelations = new ArrayList<>();
+            Set<String> kgDocTitles = new LinkedHashSet<>();
+            for (int i = 0; i < Math.min(KG_INPUT_LIMIT, similarDocs.size()); i++) {
+                SearchHit doc = similarDocs.get(i);
+                if (doc.score() < kgLookupThreshold) continue;
+                List<KgRelation> rels = neo4jService.findRelations(doc.title());
+                for (KgRelation r : rels) {
+                    kgRelations.add(r);
+                    kgDocTitles.add(r.toDocument());
+                }
+            }
+
+            Set<String> existingTitles = similarDocs.stream()
+                    .map(SearchHit::title).collect(Collectors.toSet());
+            List<SearchHit> kgHits = new ArrayList<>();
+            for (String title : kgDocTitles) {
+                if (existingTitles.contains(title)) continue;
+                List<List<Float>> kgEmb = embeddingService.encode(List.of(title));
+                List<SearchHit> hits = milvusService.searchSimilar(kgEmb.get(0), KG_RETRIEVAL_TOP_K);
+                for (SearchHit hit : hits) {
+                    if (!existingTitles.contains(hit.title())) {
+                        kgHits.add(hit);
+                        existingTitles.add(hit.title());
+                    }
+                }
+            }
+
+            List<String> numberedSources = new ArrayList<>();
+            List<SourceInfo> sourceInfoList = new ArrayList<>();
+            int idx = 1;
+            for (SearchHit doc : similarDocs) {
+                numberedSources.add(String.format("[%d] 《%s》 %s", idx, doc.title(), doc.chunkText()));
+                sourceInfoList.add(new SourceInfo(doc.id(), doc.title(), doc.chunkText(), doc.score()));
+                idx++;
+            }
+            for (SearchHit doc : kgHits) {
+                numberedSources.add(String.format("[%d] 《%s》 %s", idx, doc.title(), doc.chunkText()));
+                sourceInfoList.add(new SourceInfo(doc.id(), doc.title(), doc.chunkText(), doc.score()));
+                idx++;
+            }
+            if (!kgRelations.isEmpty()) {
+                numberedSources.add("\n【政策引用关系】");
+                for (KgRelation r : kgRelations) {
+                    numberedSources.add(String.format("- %s %s → 《%s》", r.fromClause(), r.relation(), r.toDocument()));
+                }
+            }
+            String context = String.join("\n", numberedSources);
+            String userMessage = "政策条文：\n" + context + "\n\n用户问题：" + question;
+
+            // Step 6: Stream answer via SSE
+            StringBuilder fullAnswer = new StringBuilder();
+
+            try {
+                emitter.send(SseEmitter.event().name("start").data(""));
+            } catch (Exception ignored) {}
+
+            deepSeekService.chatStream(SYSTEM_PROMPT, userMessage, (token, isReasoning) -> {
+                try {
+                    if (isReasoning) {
+                        emitter.send(SseEmitter.event().name("reasoning").data(objectMapper.writeValueAsString(token)));
+                    } else {
+                        fullAnswer.append(token);
+                        emitter.send(SseEmitter.event().name("token").data(objectMapper.writeValueAsString(token)));
+                    }
+                } catch (Exception e) {
+                    log.debug("SSE send interrupted", e);
+                }
+            }, deepThinking);
+
+            // Step 7: Send sources
+            try {
+                emitter.send(SseEmitter.event().name("sources")
+                        .data(objectMapper.writeValueAsString(sourceInfoList)));
+            } catch (Exception e) {
+                log.warn("Failed to send sources", e);
+            }
+
+            // Step 8: Generate follow-up suggestions
+            try {
+                List<String> suggestions = generateSuggestions(question, fullAnswer.toString());
+                emitter.send(SseEmitter.event().name("suggestions")
+                        .data(objectMapper.writeValueAsString(suggestions)));
+            } catch (Exception e) {
+                log.warn("Failed to generate suggestions", e);
+                emitter.send(SseEmitter.event().name("suggestions").data("[]"));
+            }
+
+            // Step 9: Done
+            emitter.send(SseEmitter.event().name("done").data(""));
+            emitter.complete();
+
+        } catch (Exception e) {
+            log.error("Streaming RAG failed", e);
+            try {
+                emitter.send(SseEmitter.event().name("error").data(e.getMessage()));
+                emitter.completeWithError(e);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> generateSuggestions(String question, String answer) {
+        String prompt = "你是一个智能追问生成器。根据用户的提问和 AI 的回答，生成 3 条用户可能感兴趣的后续追问（中文，简洁，每条不超过15字）。只输出 JSON，格式：{\"suggestions\":[\"追问1\",\"追问2\",\"追问3\"]}";
+        String userMsg = "用户问题：" + question + "\nAI 回答：" + (answer.length() > 800 ? answer.substring(0, 800) + "..." : answer);
+        try {
+            Map<String, Object> result = deepSeekService.chatJson(prompt, userMsg);
+            Object sugObj = result.get("suggestions");
+            if (sugObj instanceof List<?> list && !list.isEmpty()) {
+                return list.stream().map(Object::toString).limit(3).toList();
+            }
+        } catch (Exception e) {
+            log.warn("Suggestions generation failed: {}", e.getMessage());
+        }
+        return List.of();
     }
 
     private void validateCitations(String answer, int totalSources) {

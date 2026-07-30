@@ -7,6 +7,9 @@ import jakarta.validation.constraints.NotBlank;
 public record IngestRequest(
     @NotBlank @Schema(description = "Document title") String title,
     @NotBlank @Schema(description = "Document content") String content,
+    @Schema(description = "MinIO object path; if set, content is written to MinIO after successful ingest") String minioPath,
+    @Schema(description = "Original filename for download") String originalFilename,
+    @Schema(description = "Document source: MANUAL, UPLOAD, or SYNC", defaultValue = "MANUAL") String source,
     @Schema(description = "Chunk size in characters", defaultValue = "500") int chunkSize,
     @Schema(description = "Overlap size in characters", defaultValue = "0") int overlapSize,
     @Schema(description = "Chunk mode: SENTENCE or FIXED", defaultValue = "SENTENCE") String chunkMode
@@ -15,5 +18,6 @@ public record IngestRequest(
         if (chunkSize <= 0) chunkSize = 500;
         if (overlapSize < 0) overlapSize = 0;
         if (chunkMode == null || chunkMode.isBlank()) chunkMode = "SENTENCE";
+        if (source == null || source.isBlank()) source = "MANUAL";
     }
 }
