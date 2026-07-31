@@ -95,7 +95,7 @@ public class DocumentController {
             // Sanitize null bytes
             text = text.replace("\u0000", "");
             Map<String, Object> result = documentService.ingestFromFileBytes(
-                    title, bytes, text, bytes.length,
+                    title, bytes, text,
                     "UPLOAD", chunkSize, overlapSize, chunkMode, filename);
             return ResponseEntity.ok(ApiResponse.ok(result));
         } catch (Exception e) {
@@ -124,10 +124,7 @@ public class DocumentController {
     @Operation(summary = "Batch delete documents", description = "Delete multiple documents by their UUIDs")
     public ResponseEntity<ApiResponse<Map<String, Object>>> deleteBatch(@RequestBody Map<String, java.util.List<String>> body) {
         java.util.List<String> ids = body.get("ids");
-        int count = 0;
-        for (String id : ids) {
-            try { documentService.deleteDocument(id); count++; } catch (Exception ignored) {}
-        }
+        int count = documentService.deleteBatch(ids);
         return ResponseEntity.ok(ApiResponse.ok(Map.of("deleted", count)));
     }
 

@@ -9,11 +9,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.concurrent.*;
 import java.util.*;
+import org.springframework.transaction.annotation.Transactional;
 import java.util.regex.*;
 
 @Slf4j
@@ -28,12 +29,56 @@ public class DocumentService {
     private final KnowledgeGraphService knowledgeGraphService;
     private final MinioService minioService;
 
-    /** Milvus varchar max: 4096 chars. Longer chunks are split at item boundaries. */
-    private static final int MAX_CHUNK_TEXT = 4096;
+    /** Self-injection so @Transactional works when called from thread pool. */
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private DocumentService self;
+
+    /** Milvus varchar(4096) max UTF-8 bytes. */
+    private static final int MAX_CHUNK_BYTES = 4096;
 
     /** Pattern for sub-item markers like （一）（二） or 1、2、 */
     private static final Pattern ITEM_PATTERN =
             Pattern.compile("([（(][一二三四五六七八九十百千]+[）)]|\\d+[、。．])");
+
+    // ── UTF-8 helpers ──
+
+    private static int utf8Bytes(String s) {
+        return s.getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    static String truncateUtf8(String s, int maxBytes) {
+        if (s == null || s.isEmpty()) return s;
+        if (utf8Bytes(s) <= maxBytes) return s;
+        StringBuilder sb = new StringBuilder();
+        int used = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            int cb = utf8CharBytes(c, s, i);
+            if (used + cb > maxBytes) break;
+            sb.append(c);
+            if (cb == 4) { sb.append(s.charAt(++i)); }
+            used += cb;
+        }
+        return sb.toString();
+    }
+
+    static int utf8CharBytes(char c, String s, int idx) {
+        if (c < 0x80) return 1;
+        if (c < 0x800) return 2;
+        if (!Character.isSurrogate(c)) return 3;
+        if (Character.isHighSurrogate(c) && idx + 1 < s.length()
+                && Character.isLowSurrogate(s.charAt(idx + 1))) return 4;
+        return 3;
+    }
+
+    static int countUtf8Bytes(CharSequence cs) {
+        int n = 0;
+        for (int i = 0; i < cs.length(); i++) {
+            n += utf8CharBytes(cs.charAt(i), cs.toString(), i);
+        }
+        return n;
+    }
 
     public DocumentService(ChunkingService chunkingService, EmbeddingService embeddingService,
                            MilvusService milvusService, DocumentRepository documentRepository,
@@ -120,7 +165,7 @@ public class DocumentService {
     }
 
     @Transactional
-    public Map<String, Object> ingestFromFileBytes(String title, byte[] bytes, String text, long fileSize,
+    public Map<String, Object> ingestFromFileBytes(String title, byte[] bytes, String text,
                                                     String source, int chunkSize, int overlapSize, String chunkMode,
                                                     String originalFilename) {
         try {
@@ -162,8 +207,8 @@ public class DocumentService {
         List<String> pgTexts = new ArrayList<>(); // full text for PG
 
         for (ChunkingService.ChunkSegment seg : segments) {
-            String milvusText = seg.text().length() > MAX_CHUNK_TEXT
-                    ? seg.text().substring(0, MAX_CHUNK_TEXT) : seg.text();
+            String milvusText = seg.text().length() > MAX_CHUNK_BYTES
+                    ? truncateUtf8(seg.text(), MAX_CHUNK_BYTES) : seg.text();
             chunkTexts.add(milvusText);
             pgTexts.add(seg.text()); // PG stores full text
             clauseNumbers.add(seg.clauseNumber());
@@ -201,7 +246,7 @@ public class DocumentService {
     }
 
     /**
-     * Split segments that exceed MAX_CHUNK_TEXT at item boundaries.
+     * Split segments that exceed MAX_CHUNK_BYTES at item boundaries.
      * Each sub-chunk inherits the same clause metadata for context association.
      */
     private List<ChunkingService.ChunkSegment> splitLongSegments(
@@ -209,7 +254,7 @@ public class DocumentService {
         List<ChunkingService.ChunkSegment> result = new ArrayList<>();
 
         for (ChunkingService.ChunkSegment seg : raw) {
-            if (seg.text().length() <= MAX_CHUNK_TEXT || seg.clauseNumber() == null) {
+            if (utf8Bytes(seg.text()) <= MAX_CHUNK_BYTES) {
                 result.add(seg);
                 continue;
             }
@@ -259,8 +304,8 @@ public class DocumentService {
         // If any part is still too long, hard-truncate
         List<String> finalParts = new ArrayList<>();
         for (String p : parts) {
-            if (p.length() > MAX_CHUNK_TEXT) {
-                finalParts.add(p.substring(0, MAX_CHUNK_TEXT));
+            if (utf8Bytes(p) > MAX_CHUNK_BYTES) {
+                finalParts.add(truncateUtf8(p, MAX_CHUNK_BYTES));
             } else {
                 finalParts.add(p);
             }
@@ -268,34 +313,45 @@ public class DocumentService {
         return finalParts;
     }
 
-    /** Split at sentence boundaries (。！？\n), merging until close to MAX_CHUNK_TEXT. */
+    /** Split at sentence boundaries (。！？\n), merging until close to MAX_CHUNK_BYTES. */
     private List<String> splitAtSentences(String text) {
         List<String> result = new ArrayList<>();
         StringBuilder buf = new StringBuilder();
+        int bufBytes = 0;
+        int third = MAX_CHUNK_BYTES / 3;
+        int half  = MAX_CHUNK_BYTES / 2;
 
-        for (int i = 0; i < text.length(); i++) {
+        int i = 0;
+        while (i < text.length()) {
             char c = text.charAt(i);
+            int added = utf8CharBytes(c, text, i);
             buf.append(c);
+            if (added == 4) { i++; buf.append(text.charAt(i)); }
+            bufBytes += added;
+            i++;
 
             boolean isSentenceEnd = (c == '。' || c == '！' || c == '？' || c == '\n')
-                    && buf.length() > MAX_CHUNK_TEXT / 3;
+                    && bufBytes > third;
 
-            if (isSentenceEnd && buf.length() >= MAX_CHUNK_TEXT / 2) {
+            if (isSentenceEnd && bufBytes >= half) {
                 result.add(buf.toString().trim());
                 buf.setLength(0);
-            } else if (buf.length() >= MAX_CHUNK_TEXT) {
+                bufBytes = 0;
+            } else if (bufBytes >= MAX_CHUNK_BYTES) {
                 int splitAt = findLastSentenceEnd(buf);
                 if (splitAt > 0) {
                     result.add(buf.substring(0, splitAt).trim());
                     buf.replace(0, buf.length(), buf.substring(splitAt));
+                    bufBytes = countUtf8Bytes(buf);
                 } else {
                     result.add(buf.toString().trim());
                     buf.setLength(0);
+                    bufBytes = 0;
                 }
             }
         }
 
-        if (buf.length() > 0) {
+        if (!buf.isEmpty()) {
             result.add(buf.toString().trim());
         }
 
@@ -353,6 +409,31 @@ public class DocumentService {
         doc.setChunkCount(Math.max(0, doc.getChunkCount() - 1));
         doc.setUpdatedAt(LocalDateTime.now());
         documentRepository.save(doc);
+    }
+
+    public int deleteBatch(java.util.List<String> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) return 0;
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(
+                Math.min(documentIds.size(), 4));
+        java.util.concurrent.atomic.AtomicInteger deleted = new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+
+        for (String id : documentIds) {
+            futures.add(executor.submit(() -> {
+                try {
+                    self.deleteDocument(id);  // via proxy → @Transactional works
+                    deleted.incrementAndGet();
+                } catch (Exception e) {
+                    log.warn("Batch delete failed for {}: {}", id, e.getMessage());
+                }
+            }));
+        }
+
+        for (var f : futures) {
+            try { f.get(30, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {}
+        }
+        executor.shutdown();
+        return deleted.get();
     }
 
     public DocumentResponse getById(long id) {

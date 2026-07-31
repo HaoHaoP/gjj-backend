@@ -41,9 +41,8 @@ class DocumentServiceTest {
             }
         };
         MilvusService mStub = new MilvusService(null) {
-            @Override public List<Long> insertChunks(String id, List<String> tls, List<String> txs, List<List<Float>> embs) {
+            @Override public void insertChunks(String id, List<String> tls, List<String> txs, List<List<Float>> embs) {
                 milvusIds.add(id);
-                return List.of();
             }
         };
         // KG service mock: no-op by default

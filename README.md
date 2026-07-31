@@ -25,7 +25,7 @@ java -jar target/rag-api-0.0.1-SNAPSHOT.jar
 
 | 层 | 说明 |
 |------|------|
-| Controller | 6 个 REST 控制器 |
+| Controller | 5 个 REST 控制器 |
 | Service | 11 个服务（RAG、KG、嵌入、切块、同步等） |
 | Entity | Document + Chunk |
 | Model | IngestRequest, QueryRequest, QueryResponse 等 |
@@ -39,7 +39,6 @@ java -jar target/rag-api-0.0.1-SNAPSHOT.jar
 | GET | `/api/documents/sync/{tid}` | 查询进度 |
 | POST | `/api/rag/query` | RAG 问答 |
 | GET | `/api/graph/data` | 知识图谱数据 |
-| GET | `/api/experiments/results` | 实验数据 |
 
 ## Docker
 

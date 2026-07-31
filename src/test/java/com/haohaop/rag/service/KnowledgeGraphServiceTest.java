@@ -98,22 +98,22 @@ class KnowledgeGraphServiceTest {
         }
 
         @Test @DisplayName("clears Neo4j first")
-        void clearsFirst() { log.info("[Test] clearFirst"); kgService.buildAll(); assertThat(neo4jCleared).isTrue(); log.info("[PASS] Neo4j cleared"); }
+        void clearsFirst() { log.info("[Test] clearFirst"); kgService.buildAll(pct -> {}); assertThat(neo4jCleared).isTrue(); log.info("[PASS] Neo4j cleared"); }
 
         @Test @DisplayName("creates Policy nodes (2)")
-        void policies() { log.info("[Test] policies"); kgService.buildAll(); assertThat(policies).containsExactlyInAnyOrder(doc1.getTitle(),doc2.getTitle()); log.info("[PASS] {} policies",policies.size()); }
+        void policies() { log.info("[Test] policies"); kgService.buildAll(pct -> {}); assertThat(policies).containsExactlyInAnyOrder(doc1.getTitle(),doc2.getTitle()); log.info("[PASS] {} policies",policies.size()); }
 
         @Test @DisplayName("creates Clause nodes (3+2=5)")
-        void clauseNodes() { log.info("[Test] clauses"); kgService.buildAll(); assertThat(clauses).hasSize(5); log.info("[PASS] {} clauses",clauses.size()); }
+        void clauseNodes() { log.info("[Test] clauses"); kgService.buildAll(pct -> {}); assertThat(clauses).hasSize(5); log.info("[PASS] {} clauses",clauses.size()); }
 
         @Test @DisplayName("LLM extracts cross-references (1)")
-        void crossRefsTest() { log.info("[Test] crossRefs"); kgService.buildAll(); assertThat(crossRefs).hasSize(1); assertThat(crossRefs.get(0)[0]).isEqualTo("第二条"); log.info("[PASS] {} refs, {} DS calls",crossRefs.size(),dsCalls); }
+        void crossRefsTest() { log.info("[Test] crossRefs"); kgService.buildAll(pct -> {}); assertThat(crossRefs).hasSize(1); assertThat(crossRefs.get(0)[0]).isEqualTo("第二条"); log.info("[PASS] {} refs, {} DS calls",crossRefs.size(),dsCalls); }
 
         @Test @DisplayName("LLM extracts concepts + keyword-match (2 concepts, 1 mention)")
-        void conceptsTest() { log.info("[Test] concepts"); kgService.buildAll(); assertThat(concepts).hasSize(2); assertThat(concepts.get(0)[0]).isEqualTo("缴存比例"); log.info("[PASS] {} concepts",concepts.size()); }
+        void conceptsTest() { log.info("[Test] concepts"); kgService.buildAll(pct -> {}); assertThat(concepts).hasSize(2); assertThat(concepts.get(0)[0]).isEqualTo("缴存比例"); log.info("[PASS] {} concepts",concepts.size()); }
 
         @Test @DisplayName("returns summary map")
-        void summary() { log.info("[Test] summary"); Map<String,Object> r = kgService.buildAll(); assertThat(r).containsKeys("cleared","policies","crossReferences","concepts","elapsedMs"); assertThat(r.get("policies")).isEqualTo(2); log.info("[PASS] summary={}",r); }
+        void summary() { log.info("[Test] summary"); Map<String,Object> r = kgService.buildAll(pct -> {}); assertThat(r).containsKeys("cleared","policies","crossReferences","concepts","elapsedMs"); assertThat(r.get("policies")).isEqualTo(2); log.info("[PASS] summary={}",r); }
     }
 
     @Nested @DisplayName("error handling")
@@ -124,7 +124,7 @@ class KnowledgeGraphServiceTest {
             dsResponses.put(1,Map.of("relations",List.of()));
             dsResponses.put(2,Map.of("relations",List.of()));
             dsResponses.put(3,Map.of());
-            Map<String,Object> r = kgService.buildAll();
+            Map<String,Object> r = kgService.buildAll(pct -> {});
             assertThat(r.get("concepts")).isEqualTo(0);
             assertThat(r.get("policies")).isEqualTo(2);
             log.info("[PASS] survived: concepts=0, policies=2");

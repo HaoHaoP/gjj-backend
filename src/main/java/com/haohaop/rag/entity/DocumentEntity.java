@@ -1,9 +1,15 @@
 package com.haohaop.rag.entity;
 
 import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 import java.time.LocalDateTime;
 
 @Entity
+@Getter
+@Setter
+@NoArgsConstructor
 @Table(name = "documents")
 public class DocumentEntity {
     @Id
@@ -17,7 +23,7 @@ public class DocumentEntity {
     private String title;
 
     @Column(nullable = false, length = 20)
-    private String source; // SYNC, UPLOAD, MANUAL
+    private String source;
 
     @Column(name = "chunk_count", nullable = false)
     private int chunkCount;
@@ -41,7 +47,7 @@ public class DocumentEntity {
     private long fileSize;
 
     @Column(length = 20)
-    private String status = "active";
+    private String status;
 
     @Column(name = "sync_batch_id", length = 36)
     private String syncBatchId;
@@ -51,8 +57,6 @@ public class DocumentEntity {
 
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt = LocalDateTime.now();
-
-    public DocumentEntity() {}
 
     public DocumentEntity(String documentId, String title, String source, int chunkCount,
                           int chunkSize, int overlapSize, String chunkMode,
@@ -71,35 +75,4 @@ public class DocumentEntity {
         this.createdAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
     }
-
-    // Getters and setters
-    public Long getId() { return id; }
-    public void setId(Long id) { this.id = id; }
-    public String getDocumentId() { return documentId; }
-    public void setDocumentId(String documentId) { this.documentId = documentId; }
-    public String getTitle() { return title; }
-    public void setTitle(String title) { this.title = title; }
-    public String getSource() { return source; }
-    public void setSource(String source) { this.source = source; }
-    public int getChunkCount() { return chunkCount; }
-    public void setChunkCount(int chunkCount) { this.chunkCount = chunkCount; }
-    public int getChunkSize() { return chunkSize; }
-    public void setChunkSize(int chunkSize) { this.chunkSize = chunkSize; }
-    public int getOverlapSize() { return overlapSize; }
-    public void setOverlapSize(int overlapSize) { this.overlapSize = overlapSize; }
-    public String getChunkMode() { return chunkMode; }
-    public void setChunkMode(String chunkMode) { this.chunkMode = chunkMode; }
-    public String getMinioPath() { return minioPath; }
-    public void setMinioPath(String minioPath) { this.minioPath = minioPath; }
-    public String getOriginalFilename() { return originalFilename; }
-    public void setOriginalFilename(String originalFilename) { this.originalFilename = originalFilename; }
-    public long getFileSize() { return fileSize; }
-    public void setFileSize(long fileSize) { this.fileSize = fileSize; }
-    public String getStatus() { return status; }
-    public void setStatus(String status) { this.status = status; }
-    public String getSyncBatchId() { return syncBatchId; }
-    public void setSyncBatchId(String syncBatchId) { this.syncBatchId = syncBatchId; }
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public LocalDateTime getUpdatedAt() { return updatedAt; }
-    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
 }

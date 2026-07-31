@@ -4,10 +4,12 @@ import com.haohaop.rag.entity.ChunkEntity;
 import com.haohaop.rag.entity.DocumentEntity;
 import com.haohaop.rag.repository.ChunkRepository;
 import com.haohaop.rag.repository.DocumentRepository;
+import org.springframework.data.domain.PageRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -45,24 +47,28 @@ public class KnowledgeGraphService {
      * Full KG build: clear → hierarchy → cross-refs → concepts.
      * @return summary map with counts
      */
-    public Map<String, Object> buildAll() {
+    public Map<String, Object> buildAll(Consumer<Integer> progressCallback) {
         Map<String, Object> result = new LinkedHashMap<>();
         long start = System.currentTimeMillis();
 
         // 1. Clear existing graph
         neo4jService.clearAll();
+        progressCallback.accept(3);
         result.put("cleared", true);
 
         // 2. Build Policy + Clause + Chapter/Section hierarchy
         int policyCount = buildDocumentHierarchy();
+        progressCallback.accept(15);
         result.put("policies", policyCount);
 
         // 3. Extract cross-document references (LLM)
-        int refCount = extractCrossReferences();
+        int refCount = extractCrossReferences(progressCallback);
+        progressCallback.accept(80);
         result.put("crossReferences", refCount);
 
         // 4. Extract concept entities (LLM)
         int conceptCount = extractConcepts();
+        progressCallback.accept(97);
         result.put("concepts", conceptCount);
 
         long elapsed = System.currentTimeMillis() - start;
@@ -202,92 +208,94 @@ public class KnowledgeGraphService {
         If no references found, return {"relations": []}
         """;
 
-    private int extractCrossReferences() {
+    private int extractCrossReferences(Consumer<Integer> progressCallback) {
         List<DocumentEntity> docs = documentRepository.findAllByOrderByCreatedAtDesc(
                 org.springframework.data.domain.PageRequest.of(0, 500)).getContent();
 
-        // Collect all known policy titles for the LLM to reference
         Set<String> knownTitles = new LinkedHashSet<>();
-        for (DocumentEntity doc : docs) {
-            knownTitles.add(doc.getTitle());
-        }
+        for (DocumentEntity doc : docs) knownTitles.add(doc.getTitle());
         String knownTitlesList = String.join("\n", knownTitles.stream().map(t -> "- " + t).toList());
-
-        // Normalize: strip version suffixes for matching
         Map<String, String> titleNormalize = new HashMap<>();
         for (String t : knownTitles) {
             String normalized = t.replaceAll("[（(](?:试行|修订|暂行|\\d{4}).*$", "").trim();
             titleNormalize.put(normalized, t);
         }
 
-        int totalRefs = 0;
-        int failures = 0;
+        int total = docs.size();
+        java.util.concurrent.atomic.AtomicInteger completed = new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.concurrent.atomic.AtomicInteger totalRefs = new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.concurrent.atomic.AtomicInteger failures = new java.util.concurrent.atomic.AtomicInteger(0);
+
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(4);
+        java.util.List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
 
         for (DocumentEntity doc : docs) {
-            try {
-                var page = chunkRepository.findByDocumentIdOrderByChunkIndexAsc(doc.getDocumentId(),
-                        org.springframework.data.domain.PageRequest.of(0, 500));
-
-                // Build clauses payload
-                StringBuilder clausesText = new StringBuilder();
-                List<String> clauseNums = new ArrayList<>();
-                for (ChunkEntity chunk : page.getContent()) {
-                    if (chunk.getClauseNumber() != null) {
-                        clausesText.append("[").append(chunk.getClauseNumber()).append("] ")
-                                .append(chunk.getText()).append("\n\n");
-                        clauseNums.add(chunk.getClauseNumber());
+            futures.add(executor.submit(() -> {
+                try {
+                    var page = chunkRepository.findByDocumentIdOrderByChunkIndexAsc(doc.getDocumentId(),
+                            org.springframework.data.domain.PageRequest.of(0, 500));
+                    StringBuilder clausesText = new StringBuilder();
+                    for (ChunkEntity chunk : page.getContent()) {
+                        if (chunk.getClauseNumber() != null) {
+                            clausesText.append("[").append(chunk.getClauseNumber()).append("] ")
+                                    .append(chunk.getText()).append("\n\n");
+                        }
                     }
-                }
-                if (clauseNums.isEmpty()) continue;
+                    if (clausesText.isEmpty()) return;
 
-                String userMessage = String.format("""
-                    Document: 《%s》
+                    String userMessage = String.format("""
+                            Document: 《%s》
 
-                    Known policy documents (match against these exact titles):
-                    %s
+                            Known policy documents (match against these exact titles):
+                            %s
 
-                    Clauses to analyze:
-                    %s
-                    """, doc.getTitle(), knownTitlesList, clausesText.toString());
+                            Clauses to analyze:
+                            %s
+                            """, doc.getTitle(), knownTitlesList, clausesText.toString());
 
-                Map<String, Object> response = deepSeekService.chatJson(CROSS_REF_SYSTEM_PROMPT, userMessage);
+                    Map<String, Object> response = deepSeekService.chatJson(CROSS_REF_SYSTEM_PROMPT, userMessage);
 
-                @SuppressWarnings("unchecked")
-                List<Map<String, Object>> relations =
-                        (List<Map<String, Object>>) response.getOrDefault("relations", List.of());
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> relations =
+                            (List<Map<String, Object>>) response.getOrDefault("relations", List.of());
 
-                for (Map<String, Object> rel : relations) {
-                    String fromClause = (String) rel.get("fromClause");
-                    String relationType = ((String) rel.getOrDefault("relation", "REFERENCES")).toUpperCase();
-                    String toDocument = (String) rel.get("toDocument");
-                    String evidence = (String) rel.getOrDefault("evidence", "");
+                    for (Map<String, Object> rel : relations) {
+                        String fromClause = (String) rel.get("fromClause");
+                        String relationType = ((String) rel.getOrDefault("relation", "REFERENCES")).toUpperCase();
+                        String toDocument = (String) rel.get("toDocument");
+                        String evidence = (String) rel.getOrDefault("evidence", "");
 
-                    if (fromClause == null || toDocument == null) continue;
-
-                    // Normalize target document title
-                    String matchedTitle = fuzzyMatchTitle(toDocument, titleNormalize);
-                    if (matchedTitle == null) {
-                        log.debug("Cross-ref target not found: '{}'", toDocument);
-                        continue;
+                        if (fromClause == null || toDocument == null) continue;
+                        String matchedTitle = fuzzyMatchTitle(toDocument, titleNormalize);
+                        if (matchedTitle == null) {
+                            log.debug("Cross-ref target not found: '{}'", toDocument);
+                            continue;
+                        }
+                        neo4jService.createCrossReference(fromClause, relationType, matchedTitle, evidence);
+                        totalRefs.incrementAndGet();
                     }
+                    log.info("Cross-ref extracted for '{}': {} relations", doc.getTitle(), relations.size());
 
-                    neo4jService.createCrossReference(fromClause, relationType, matchedTitle, evidence);
-                    totalRefs++;
+                } catch (Exception e) {
+                    failures.incrementAndGet();
+                    log.warn("Cross-ref extraction failed for '{}': {}", doc.getTitle(), e.getMessage());
                 }
-                log.info("Cross-ref extracted for '{}': {} relations", doc.getTitle(), relations.size());
-
-            } catch (Exception e) {
-                failures++;
-                log.warn("Cross-ref extraction failed for '{}': {}", doc.getTitle(), e.getMessage());
-            }
+                completed.incrementAndGet();
+                progressCallback.accept(20 + 60 * completed.get() / total);
+            }));
         }
 
-        double failureRate = (double) failures / docs.size();
+        executor.shutdown();
+        for (var f : futures) {
+            try { f.get(120, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {}
+        }
+
+        double failureRate = (double) failures.get() / docs.size();
         if (failureRate > MAX_FAILURE_RATE && docs.size() > 3) {
             log.error("Cross-ref failure rate {} > {} — aborting", failureRate, MAX_FAILURE_RATE);
-            throw new RuntimeException("KG cross-ref extraction failed: " + failures + "/" + docs.size());
+            throw new RuntimeException("KG cross-ref extraction failed: " + failures.get() + "/" + docs.size());
         }
-        return totalRefs;
+        return totalRefs.get();
     }
 
     // ==================================================================
@@ -358,14 +366,15 @@ public class KnowledgeGraphService {
     }
 
     private void linkConceptsToClauses(List<Map<String, Object>> concepts) {
-        var allChunks = chunkRepository.findAll();
         for (Map<String, Object> concept : concepts) {
             String name = (String) concept.get("name");
             if (name == null || name.isBlank()) continue;
+            List<ChunkEntity> matches = chunkRepository.findTop10ByTextContaining(
+                    name, PageRequest.of(0, 10));
 
             int linked = 0;
-            for (ChunkEntity chunk : allChunks) {
-                if (chunk.getText() == null || !chunk.getText().contains(name)) continue;
+            for (ChunkEntity chunk : matches) {
+                if (chunk.getText() == null) continue;
 
                 if (chunk.getClauseNumber() != null) {
                     neo4jService.createMentionsRelation(chunk.getClauseNumber(), name, null);

@@ -103,19 +103,16 @@ public class SyncService {
                     return;
                 }
 
-                // ── Step 2: Build Knowledge Graph (85-100%) ──
+                // ── Step 2: KG build (non-blocking, failure won't block sync) ──
                 task.stage = "knowledge-graph";
                 task.progress = 85;
-                log.info("Starting knowledge graph build...");
+                log.info("Starting knowledge graph build (async)...");
                 try {
-                    Map<String, Object> kgResult = knowledgeGraphService.buildAll();
-                    log.info("Knowledge graph built: {}", kgResult);
-                    task.kgResult = kgResult;
+                    knowledgeGraphService.buildAll(
+                            pct -> task.progress = 85 + pct * 14 / 100);
+                    log.info("Knowledge graph build completed");
                 } catch (Exception e) {
-                    log.error("Knowledge graph build failed", e);
-                    task.status = "failed";
-                    task.error = "KG build failed: " + e.getMessage();
-                    return;
+                    log.warn("Knowledge graph build failed (sync continues): {}", e.getMessage());
                 }
 
                 task.status = "done";

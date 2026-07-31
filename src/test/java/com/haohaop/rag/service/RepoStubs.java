@@ -7,6 +7,7 @@ import com.haohaop.rag.repository.DocumentRepository;
 import org.springframework.data.domain.*;
 import java.util.*;
 
+@SuppressWarnings("deprecation")
 class RepoStubs {
 
     static class DocRepoStub implements DocumentRepository {
@@ -83,5 +84,9 @@ class RepoStubs {
         @Override public List<ChunkEntity> findByDocumentIdOrderByChunkIndexAsc(String id) { return chunks; }
         @Override public int countByDocumentId(String id) { return chunks.size(); }
         @Override public void deleteByDocumentId(String id) {}
+        @Override public List<ChunkEntity> findTop10ByTextContaining(String keyword, Pageable pageable) {
+            return chunks.stream().filter(c -> c.getText() != null && c.getText().contains(keyword))
+                    .limit(pageable.getPageSize()).toList();
+        }
     }
 }

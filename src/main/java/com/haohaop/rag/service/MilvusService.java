@@ -5,6 +5,7 @@ import com.haohaop.rag.model.SearchHit;
 import io.milvus.client.MilvusServiceClient;
 import io.milvus.grpc.*;
 import io.milvus.param.collection.*;
+import java.nio.charset.StandardCharsets;
 import io.milvus.common.clientenum.ConsistencyLevelEnum;
 import io.milvus.param.MetricType;
 import io.milvus.param.R;
@@ -26,6 +27,7 @@ import java.util.Collections;
 import java.util.List;
 
 @Slf4j
+@SuppressWarnings({"deprecation", "ResultOfMethodCallIgnored"})
 @Service
 public class MilvusService {
 
@@ -115,12 +117,21 @@ public class MilvusService {
         }
     }
 
-    public List<Long> insertChunks(String documentId, List<String> titles, List<String> chunkTexts, List<List<Float>> embeddings) {
+    public void insertChunks(String documentId, List<String> titles, List<String> chunkTexts, List<List<Float>> embeddings) {
         List<String> titleList = titles.stream()
                 .map(t -> t.length() > 500 ? t.substring(0, 500) : t)
                 .toList();
         List<String> chunkList = chunkTexts.stream()
-                .map(t -> t.length() > 4096 ? t.substring(0, 4096) : t)
+                .map(t -> {
+                    int bytes = t.getBytes(StandardCharsets.UTF_8).length;
+                    if (bytes > 4096) {
+                        String preview = t.substring(0, 200);
+                        throw new IllegalArgumentException(
+                                "Chunk text exceeds Milvus varchar(4096 UTF-8 bytes): bytes=" + bytes
+                                + ", chars=" + t.length() + ", preview=" + preview + "...");
+                    }
+                    return t;
+                })
                 .toList();
         List<String> docIdList = Collections.nCopies(titles.size(), documentId);
 
@@ -141,9 +152,8 @@ public class MilvusService {
         }
 
         MutationResult result = insertResp.getData();
-        List<Long> ids = result.getIDs().getIntId().getDataList();
-        log.info("Inserted {} chunks into Milvus for doc {}", ids.size(), documentId);
-        return ids;
+        log.info("Inserted {} chunks into Milvus for doc {}",
+                result.getIDs().getIntId().getDataList().size(), documentId);
     }
 
     public List<SearchHit> searchSimilar(List<Float> queryEmbedding, int topK) {
@@ -175,14 +185,11 @@ public class MilvusService {
 
             String title = "";
             String chunkText = "";
-            String docId = "";
             try {
                 List<?> titleData = wrapper.getFieldData("title", 0);
                 if (titleData != null && i < titleData.size()) title = String.valueOf(titleData.get(i));
                 List<?> chunkData = wrapper.getFieldData("chunk_text", 0);
                 if (chunkData != null && i < chunkData.size()) chunkText = String.valueOf(chunkData.get(i));
-                List<?> docIdData = wrapper.getFieldData("document_id", 0);
-                if (docIdData != null && i < docIdData.size()) docId = String.valueOf(docIdData.get(i));
             } catch (Exception e) {
                 log.warn("Failed to extract field data from search result", e);
             }
@@ -190,15 +197,6 @@ public class MilvusService {
             hits.add(new SearchHit(id, title, chunkText, score));
         }
         return hits;
-    }
-
-    public List<DocumentResponse> listAll() {
-        return queryByExpr("id >= 0", List.of("id", "title", "chunk_text", "document_id"));
-    }
-
-    public List<DocumentResponse> listByDocumentId(String documentId) {
-        return queryByExpr("document_id == \"" + documentId + "\"",
-                List.of("id", "title", "chunk_text", "document_id"));
     }
 
     public DocumentResponse getById(long id) {
@@ -248,14 +246,12 @@ public class MilvusService {
         List<Long> idList = new ArrayList<>();
         List<String> titleList = new ArrayList<>();
         List<String> chunkList = new ArrayList<>();
-        List<String> docIdList = new ArrayList<>();
 
         for (var field : fieldsList) {
             switch (field.getFieldName()) {
                 case "id" -> idList.addAll(field.getScalars().getLongData().getDataList());
                 case "title" -> titleList.addAll(field.getScalars().getStringData().getDataList());
                 case "chunk_text" -> chunkList.addAll(field.getScalars().getStringData().getDataList());
-                case "document_id" -> docIdList.addAll(field.getScalars().getStringData().getDataList());
             }
         }
 
