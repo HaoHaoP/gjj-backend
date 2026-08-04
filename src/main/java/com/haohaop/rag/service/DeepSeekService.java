@@ -16,7 +16,7 @@ import java.util.Map;
 public class DeepSeekService {
 
     private static final String API_URL = "https://api.deepseek.com/v1/chat/completions";
-    private static final String MODEL = "deepseek-v4-pro";
+    private static final String MODEL = "deepseek-v4-flash";
 
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;

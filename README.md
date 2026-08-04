@@ -4,7 +4,7 @@
 
 ## 技术栈
 
-Spring Boot 3.3 + Java 21 + PostgreSQL + Milvus 2.4 + MinIO + Neo4j 5 + BGE-M3
+Spring Boot 3.3 + Java 21 + PostgreSQL + Milvus 2.4 + MinIO + Neo4j 5 + BGE-M3 + OkHttp
 
 ## 快速开始
 
@@ -25,26 +25,28 @@ java -jar target/rag-api-0.0.1-SNAPSHOT.jar
 
 | 层 | 说明 |
 |------|------|
-| Controller | 5 个 REST 控制器 |
-| Service | 11 个服务（RAG、KG、嵌入、切块、同步等） |
-| Entity | Document + Chunk |
-| Model | IngestRequest, QueryRequest, QueryResponse 等 |
+| Controller | 5 个（Document/Rag/Graph/Chunk/Health） |
+| Service | 12 个（RAG、KG、Feedback、嵌入、切块、同步等） |
+| Entity | Document + Chunk + Feedback |
+| Model | 11 个 DTO（QueryRequest/QueryResponse/IngestRequest...） |
 
-## API
+## API 速览
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/documents/ingest` | 文本入库（Pipeline 直接调用） |
+| POST | `/api/documents/ingest` | 文本入库（Pipeline 调用） |
 | POST | `/api/documents/sync` | 触发同步 |
-| GET | `/api/documents/sync/{tid}` | 查询进度 |
 | POST | `/api/rag/query` | RAG 问答 |
-| GET | `/api/graph/data` | 知识图谱数据 |
+| POST | `/api/rag/query/stream` | SSE 流式问答 |
+| POST | `/api/rag/feedback` | 用户反馈 |
+| GET | `/api/graph` | 知识图谱数据 |
+| DELETE | `/api/documents/batch` | 批量删除 |
 
 ## Docker
 
 | 容器 | 端口 | 用途 |
 |------|------|------|
-| gjj-postgres | 5433 | 元数据 |
+| gjj-postgres | 5433 | 元数据 + 反馈 |
 | gjj-neo4j | 7474/7687 | 知识图谱 |
 | milvus-standalone | 19530 | 向量 |
 | minio | 9000 | 文件 |
