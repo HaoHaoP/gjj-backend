@@ -222,7 +222,7 @@ public class DocumentService {
 
         // 1. Encode + Milvus (truncated text)
         List<String> titles = new ArrayList<>(Collections.nCopies(chunkTexts.size(), title));
-        List<List<Float>> embeddings = embeddingService.encode(chunkTexts);
+        List<List<Float>> embeddings = embeddingService.encodeBatch(chunkTexts);
         milvusService.insertChunks(documentId, titles, chunkTexts, embeddings);
 
         // 2. Write Document to PG

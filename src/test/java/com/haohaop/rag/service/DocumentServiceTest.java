@@ -39,6 +39,9 @@ class DocumentServiceTest {
                 for (int i = 0; i < ts.size(); i++) r.add(List.of((float)i/100, 0.5f));
                 return r;
             }
+            @Override public List<List<Float>> encodeBatch(List<String> ts) {
+                return encode(ts);
+            }
         };
         MilvusService mStub = new MilvusService(null) {
             @Override public void insertChunks(String id, List<String> tls, List<String> txs, List<List<Float>> embs) {

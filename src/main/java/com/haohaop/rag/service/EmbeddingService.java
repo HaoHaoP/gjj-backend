@@ -9,6 +9,8 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -21,17 +23,35 @@ import java.util.Map;
 public class EmbeddingService {
 
     private final OkHttpClient httpClient;
+    private final OkHttpClient batchHttpClient;
     private final ObjectMapper objectMapper;
     private final String embeddingUrl;
 
     public EmbeddingService(OkHttpClient httpClient, ObjectMapper objectMapper,
                             @Value("${embedding.url}") String embeddingUrl) {
+        this(httpClient, httpClient, objectMapper, embeddingUrl);
+    }
+
+    @Autowired
+    public EmbeddingService(OkHttpClient httpClient,
+                            @Qualifier("embeddingHttpClient") OkHttpClient batchHttpClient,
+                            ObjectMapper objectMapper,
+                            @Value("${embedding.url}") String embeddingUrl) {
         this.httpClient = httpClient;
+        this.batchHttpClient = batchHttpClient;
         this.objectMapper = objectMapper;
         this.embeddingUrl = embeddingUrl;
     }
 
     public List<List<Float>> encode(List<String> texts) {
+        return encode(texts, httpClient);
+    }
+
+    public List<List<Float>> encodeBatch(List<String> texts) {
+        return encode(texts, batchHttpClient);
+    }
+
+    private List<List<Float>> encode(List<String> texts, OkHttpClient client) {
         try {
             String json = objectMapper.writeValueAsString(Map.of("sentences", texts));
             RequestBody body = RequestBody.create(json, MediaType.parse("application/json"));
@@ -40,7 +60,7 @@ public class EmbeddingService {
                     .post(body)
                     .build();
 
-            try (Response response = httpClient.newCall(request).execute()) {
+            try (Response response = client.newCall(request).execute()) {
                 if (!response.isSuccessful()) {
                     throw new RuntimeException("Embedding service returned " + response.code());
                 }
