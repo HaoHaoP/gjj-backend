@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 @Service
 public class ChunkingService {
 
-    /** Structured chunk segment with clause/level metadata. */
+    /** 带条款/层级元数据的结构化分块段。 */
     public record ChunkSegment(
             String text,
             String clauseNumber,
@@ -45,8 +45,8 @@ public class ChunkingService {
     }
 
     /**
-     * Structured chunk with clause-level metadata extraction.
-     * For CLAUSE mode, also extracts chapter/section/clause numbers.
+     * 结构化分块并提取条款级元数据。
+     * CLAUSE 模式还会提取章/节/条编号。
      */
     public List<ChunkSegment> chunkStructured(String text, int chunkSize, int overlapSize, String mode) {
         if (text == null || text.isBlank()) return List.of();
@@ -88,7 +88,7 @@ public class ChunkingService {
             if (!chunk.isEmpty()) chunks.add(chunk);
         }
 
-        log.debug("Clause chunk: {} chunks from {} chars", chunks.size(), text.length());
+        log.debug("条款分块：从 {} 个字符生成 {} 个分块", chunks.size(), text.length());
         return chunks;
     }
 
@@ -144,7 +144,7 @@ public class ChunkingService {
             Matcher enumSecMatch = ENUM_SECTION_PATTERN.matcher(block);
 
             if (chMatch.find()) {
-                // Preserve chapter heading as segment with previous context, then update
+                // 将章标题作为带前序上下文的分块保留，然后更新当前章
                 segments.add(new ChunkSegment(block, null, currentChapter, currentSection));
                 currentChapter = "第" + chMatch.group(1) + "章";
                 currentSection = null;
@@ -164,7 +164,7 @@ public class ChunkingService {
             }
         }
 
-        log.debug("Clause structured chunk: {} segments from {} chars", segments.size(), text.length());
+        log.debug("条款结构化分块：从 {} 个字符生成 {} 个分块", segments.size(), text.length());
         return segments;
     }
 
@@ -175,9 +175,9 @@ public class ChunkingService {
     private static final Pattern MD_CLAUSE = Pattern.compile("(?m)^\\*\\*第([一二三四五六七八九十百千]+)条\\*\\*");
 
     private List<ChunkSegment> markdownChunkStructured(String text) {
-        // Detect: if no ## headings, fallback to CLAUSE mode
+        // 检测：若没有 ## 标题，则回退到 CLAUSE 模式
         if (!Pattern.compile("(?m)^##\s+", Pattern.MULTILINE).matcher(text).find()) {
-            log.debug("No '## ' headings found, falling back to CLAUSE mode");
+            log.debug("未找到『## 』标题，回退到 CLAUSE 模式");
             return clauseChunkStructured(text);
         }
 
@@ -190,23 +190,23 @@ public class ChunkingService {
             headings.add(headingMatcher.group().trim());
         }
 
-        // Preamble: text before first heading
+        // 前言：第一个标题之前的文本
         if (sections.length > 0 && !sections[0].isBlank()) {
             segments.add(new ChunkSegment(sections[0].trim(), null, null, null));
         }
 
         String currentChapter = null;
 
-        // Process each heading + its content
+        // 处理每个标题及其内容
         for (int i = 0; i < headings.size() && i + 1 < sections.length; i++) {
             String heading = headings.get(i);
-            String body = sections[i + 1];  // sections[0] is preamble, sections[1] is after first heading
+            String body = sections[i + 1];  // sections[0] 是前言，sections[1] 是第一个标题之后的内容
 
             if (heading.startsWith("##")) {
                 currentChapter = heading.substring(2).trim();
             }
 
-            // Split body by **第X条** markers
+            // 按 **第X条** 标记拆分正文
             Matcher clauseMatcher = MD_CLAUSE.matcher(body);
             List<Integer> clausePositions = new ArrayList<>();
             while (clauseMatcher.find()) {
@@ -214,13 +214,13 @@ public class ChunkingService {
             }
 
             if (clausePositions.isEmpty()) {
-                // No clause markers — add entire body as one segment
+                // 没有条款标记——将整个正文作为一个分块
                 String text2 = (heading + "\n" + body.trim()).trim();
                 if (!text2.isBlank()) {
                     segments.add(new ChunkSegment(text2, null, currentChapter, null));
                 }
             } else {
-                // Add heading line + text before first clause
+                // 添加标题行及第一个条款之前的文本
                 if (clausePositions.get(0) > 0) {
                     String intro = (heading + "\n" + body.trim().substring(0, clausePositions.get(0))).trim();
                     if (!intro.isBlank()) {
@@ -228,7 +228,7 @@ public class ChunkingService {
                     }
                 }
 
-                // Split at clause boundaries
+                // 在条款边界处拆分
                 for (int j = 0; j < clausePositions.size(); j++) {
                     int start = clausePositions.get(j);
                     int end = (j + 1 < clausePositions.size()) ? clausePositions.get(j + 1) : body.length();
@@ -247,7 +247,7 @@ public class ChunkingService {
             }
         }
 
-        log.debug("Markdown chunk: {} segments from {} chars", segments.size(), text.length());
+        log.debug("Markdown 分块：从 {} 个字符生成 {} 个分块", segments.size(), text.length());
         return segments;
     }
 
@@ -279,7 +279,7 @@ public class ChunkingService {
                 break;
             }
         }
-        log.debug("Sentence chunk: {} chunks from {} chars", chunks.size(), text.length());
+        log.debug("按句分块：从 {} 个字符生成 {} 个分块", chunks.size(), text.length());
         return chunks;
     }
 
@@ -296,7 +296,7 @@ public class ChunkingService {
             start = Math.max(start, end - overlapSize);
             if (start >= text.length()) break;
         }
-        log.debug("Fixed chunk: {} chunks", chunks.size());
+        log.debug("固定长度分块：{} 个分块", chunks.size());
         return chunks;
     }
 

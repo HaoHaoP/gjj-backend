@@ -62,7 +62,7 @@ public class EmbeddingService {
 
             try (Response response = client.newCall(request).execute()) {
                 if (!response.isSuccessful()) {
-                    throw new RuntimeException("Embedding service returned " + response.code());
+                    throw new RuntimeException("向量化服务返回状态码：" + response.code());
                 }
                 String responseBody = response.body() != null ? response.body().string() : "[]";
                 Map<String, Object> result = objectMapper.readValue(responseBody,
@@ -76,8 +76,8 @@ public class EmbeddingService {
                         .toList();
             }
         } catch (IOException e) {
-            log.error("Failed to encode texts", e);
-            throw new RuntimeException("Embedding request failed", e);
+            log.error("文本向量化失败", e);
+            throw new RuntimeException("向量化请求失败", e);
         }
     }
 }

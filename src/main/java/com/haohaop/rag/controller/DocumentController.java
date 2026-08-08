@@ -18,7 +18,7 @@ import java.util.Map;
 @Slf4j
 @RestController
 @RequestMapping("/api/documents")
-@Tag(name = "Documents", description = "Document management API")
+@Tag(name = "文档", description = "文档管理接口")
 public class DocumentController {
 
     private final DocumentService documentService;
@@ -29,10 +29,10 @@ public class DocumentController {
         this.syncService = syncService;
     }
 
-    // ========== Document list & detail ==========
+    // ========== 文档列表与详情 ==========
 
     @GetMapping
-    @Operation(summary = "List documents", description = "List documents with pagination and optional keyword filter")
+    @Operation(summary = "文档列表", description = "分页查询文档列表，支持可选的关键字过滤")
     public ResponseEntity<ApiResponse<Map<String, Object>>> listDocuments(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
@@ -41,13 +41,13 @@ public class DocumentController {
     }
 
     @GetMapping("/{documentId}")
-    @Operation(summary = "Get document detail", description = "Get document metadata by its UUID")
+    @Operation(summary = "获取文档详情", description = "根据文档 UUID 获取文档元数据")
     public ResponseEntity<ApiResponse<DocumentSummaryResponse>> getDocument(@PathVariable String documentId) {
         return ResponseEntity.ok(ApiResponse.ok(documentService.getDocument(documentId)));
     }
 
     @GetMapping("/{documentId}/chunks")
-    @Operation(summary = "List document chunks", description = "List chunks for a specific document")
+    @Operation(summary = "文档分块列表", description = "获取指定文档的分块列表")
     public ResponseEntity<ApiResponse<ChunkListResponse>> listChunks(
             @PathVariable String documentId,
             @RequestParam(defaultValue = "1") int page,
@@ -56,16 +56,16 @@ public class DocumentController {
     }
 
     @GetMapping("/{documentId}/download")
-    @Operation(summary = "Download original file", description = "Get a presigned URL for the original document file")
+    @Operation(summary = "下载原始文件", description = "获取原始文档文件的预签名下载地址")
     public ResponseEntity<ApiResponse<Map<String, String>>> getDownloadUrl(@PathVariable String documentId) {
         String url = documentService.getDownloadUrl(documentId);
         return ResponseEntity.ok(ApiResponse.ok(Map.of("url", url)));
     }
 
-    // ========== Ingest ==========
+    // ========== 入库 ==========
 
     @PostMapping("/ingest")
-    @Operation(summary = "Ingest document text", description = "Chunk, embed, and store document text. Optionally writes to MinIO if minioPath is provided.")
+    @Operation(summary = "文档文本入库", description = "对文档文本进行分块、向量化并入库。若提供了 minioPath，还会写入 MinIO。")
     public ResponseEntity<ApiResponse<Map<String, Object>>> ingest(@Valid @RequestBody IngestRequest request) {
         Map<String, Object> result = documentService.ingest(
                 request.title(), request.content(), request.source(),
@@ -75,7 +75,7 @@ public class DocumentController {
     }
 
     @PostMapping("/upload")
-    @Operation(summary = "Upload document file", description = "Upload a file to parse and ingest")
+    @Operation(summary = "上传文档文件", description = "上传文件并解析入库")
     public ResponseEntity<ApiResponse<Map<String, Object>>> upload(
             @RequestParam("file") MultipartFile file,
             @RequestParam("title") String title,
@@ -92,53 +92,53 @@ public class DocumentController {
                 text = new org.apache.tika.Tika().parseToString(
                         new java.io.ByteArrayInputStream(bytes));
             }
-            // Sanitize null bytes
+            // 清理空字节
             text = text.replace("\u0000", "");
             Map<String, Object> result = documentService.ingestFromFileBytes(
                     title, bytes, text,
                     "UPLOAD", chunkSize, overlapSize, chunkMode, filename);
             return ResponseEntity.ok(ApiResponse.ok(result));
         } catch (Exception e) {
-            log.error("Failed to process uploaded file", e);
+            log.error("处理上传文件失败", e);
             return ResponseEntity.badRequest().body(ApiResponse.fail(400, "无法解析文件: " + e.getMessage()));
         }
     }
 
-    // ========== Delete ==========
+    // ========== 删除 ==========
 
     @DeleteMapping("/{documentId}")
-    @Operation(summary = "Delete document", description = "Delete a document and all its chunks")
+    @Operation(summary = "删除文档", description = "删除文档及其全部分块")
     public ResponseEntity<ApiResponse<Void>> deleteDocument(@PathVariable String documentId) {
         documentService.deleteDocument(documentId);
         return ResponseEntity.ok(ApiResponse.ok("文档已删除"));
     }
 
     @DeleteMapping("/{documentId}/chunks/{chunkId}")
-    @Operation(summary = "Delete single chunk", description = "Delete a single chunk from a document")
+    @Operation(summary = "删除单个分块", description = "删除文档中的单个分块")
     public ResponseEntity<ApiResponse<Void>> deleteChunk(@PathVariable String documentId, @PathVariable long chunkId) {
         documentService.deleteChunk(documentId, chunkId);
         return ResponseEntity.ok(ApiResponse.ok("分块已删除"));
     }
 
     @DeleteMapping("/batch")
-    @Operation(summary = "Batch delete documents", description = "Delete multiple documents by their UUIDs")
+    @Operation(summary = "批量删除文档", description = "根据文档 UUID 批量删除文档")
     public ResponseEntity<ApiResponse<Map<String, Object>>> deleteBatch(@RequestBody Map<String, java.util.List<String>> body) {
         java.util.List<String> ids = body.get("ids");
         int count = documentService.deleteBatch(ids);
         return ResponseEntity.ok(ApiResponse.ok(Map.of("deleted", count)));
     }
 
-    // ========== Sync ==========
+    // ========== 同步 ==========
 
     @PostMapping("/sync")
-    @Operation(summary = "Sync documents", description = "Trigger crawl + extract pipeline with chunking params")
+    @Operation(summary = "同步文档", description = "触发抓取与解析流水线，并携带分块参数")
     public ResponseEntity<ApiResponse<Map<String, String>>> sync() {
         String taskId = syncService.startSync();
         return ResponseEntity.accepted().body(ApiResponse.ok(Map.of("taskId", taskId, "status", "running"), "同步任务已创建"));
     }
 
     @GetMapping("/sync/{taskId}")
-    @Operation(summary = "Sync status", description = "Check sync task status")
+    @Operation(summary = "同步状态", description = "查询同步任务状态")
     public ResponseEntity<ApiResponse<Map<String, Object>>> syncStatus(@PathVariable String taskId) {
         SyncService.SyncTask t = syncService.getStatus(taskId);
         if (t == null) return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "not_found")));

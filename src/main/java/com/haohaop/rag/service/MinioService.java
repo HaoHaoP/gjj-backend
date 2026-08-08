@@ -36,10 +36,10 @@ public class MinioService {
             boolean exists = minioClient.bucketExists(BucketExistsArgs.builder().bucket(bucket).build());
             if (!exists) {
                 minioClient.makeBucket(MakeBucketArgs.builder().bucket(bucket).build());
-                log.info("Created MinIO bucket '{}'", bucket);
+                log.info("已创建 MinIO 桶『{}』", bucket);
             }
         } catch (Exception e) {
-            log.warn("MinIO init failed: {}", e.getMessage());
+            log.warn("MinIO 初始化失败：{}", e.getMessage());
         }
     }
 
@@ -50,7 +50,7 @@ public class MinioService {
                 .stream(inputStream, size, -1)
                 .contentType(contentType)
                 .build());
-        log.info("Uploaded to MinIO: {}", objectName);
+        log.info("已上传到 MinIO：{}", objectName);
     }
 
     public InputStream download(String objectName) throws Exception {

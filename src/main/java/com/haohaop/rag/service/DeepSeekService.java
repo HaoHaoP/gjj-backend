@@ -27,7 +27,7 @@ public class DeepSeekService {
         this.objectMapper = objectMapper;
         this.apiKey = System.getenv("DEEPSEEK_API_KEY");
         if (this.apiKey == null || this.apiKey.isBlank()) {
-            log.warn("DEEPSEEK_API_KEY environment variable is not set");
+            log.warn("未设置 DEEPSEEK_API_KEY 环境变量");
         }
     }
 
@@ -57,14 +57,14 @@ public class DeepSeekService {
                 return extractContent(response);
             }
         } catch (IOException e) {
-            log.error("Failed to call DeepSeek API", e);
-            throw new RuntimeException("DeepSeek API call failed", e);
+            log.error("调用 DeepSeek API 失败", e);
+            throw new RuntimeException("DeepSeek API 调用失败", e);
         }
     }
 
     /**
-     * Chat with JSON mode enabled. Returns parsed response as a Map.
-     * DeepSeek API supports OpenAI-compatible response_format: { "type": "json_object" }.
+     * 以 JSON 模式对话。返回解析后的 Map。
+     * DeepSeek API 支持 OpenAI 兼容的 response_format：{ "type": "json_object" }。
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> chatJson(String systemPrompt, String userMessage) {
@@ -98,8 +98,8 @@ public class DeepSeekService {
                 return objectMapper.readValue(content, new TypeReference<Map<String, Object>>() {});
             }
         } catch (IOException e) {
-            log.error("Failed to call DeepSeek JSON API", e);
-            throw new RuntimeException("DeepSeek JSON API call failed", e);
+            log.error("调用 DeepSeek JSON API 失败", e);
+            throw new RuntimeException("DeepSeek JSON API 调用失败", e);
         }
     }
 
@@ -108,7 +108,7 @@ public class DeepSeekService {
         void onToken(String token, boolean isReasoning);
     }
 
-    /** Streaming chat — calls DeepSeek API with stream=true, invokes callback per token. */
+    /** 流式对话——以 stream=true 调用 DeepSeek API，逐 token 回调。 */
     public void chatStream(String systemPrompt, String userMessage, StreamCallback callback, boolean thinking) {
         try {
             List<Map<String, String>> messages = List.of(
@@ -124,10 +124,12 @@ public class DeepSeekService {
                     "thinking", Map.of("type", "enabled")
                 );
             } else {
+                // 显式禁用思考：避免模型默认产生推理内容，节省 token 并保证前端不收到 reasoning 事件
                 requestBody = Map.of(
                     "model", MODEL,
                     "messages", messages,
-                    "stream", true
+                    "stream", true,
+                    "thinking", Map.of("type", "disabled")
                 );
             }
             String json = objectMapper.writeValueAsString(requestBody);
@@ -141,7 +143,7 @@ public class DeepSeekService {
 
             try (Response response = httpClient.newCall(request).execute()) {
                 if (!response.isSuccessful()) {
-                    throw new RuntimeException("DeepSeek stream API returned " + response.code());
+                    throw new RuntimeException("DeepSeek 流式 API 返回状态码：" + response.code());
                 }
                 var respBody = response.body();
                 if (respBody == null) return;
@@ -165,7 +167,8 @@ public class DeepSeekService {
                                         String content = (String) delta.get("content");
                                         String reasoning = (String) delta.get("reasoning_content");
                                         if (content != null) callback.onToken(content, false);
-                                        if (reasoning != null) callback.onToken(reasoning, true);
+                                        // 仅在开启深度思考时才转发推理内容
+                                        if (thinking && reasoning != null) callback.onToken(reasoning, true);
                                     }
                                 }
                             } catch (Exception ignored) {}
@@ -174,16 +177,16 @@ public class DeepSeekService {
                 }
             }
         } catch (IOException e) {
-            log.error("DeepSeek stream failed", e);
-            throw new RuntimeException("DeepSeek stream call failed", e);
+            log.error("DeepSeek 流式调用失败", e);
+            throw new RuntimeException("DeepSeek 流式调用失败", e);
         }
     }
 
     private String extractContent(Response response) throws IOException {
         if (!response.isSuccessful()) {
             String errorBody = response.body() != null ? response.body().string() : "unknown";
-            log.error("DeepSeek API error: {} - {}", response.code(), errorBody);
-            throw new RuntimeException("DeepSeek API returned " + response.code() + ": " + errorBody);
+            log.error("DeepSeek API 错误：{} - {}", response.code(), errorBody);
+            throw new RuntimeException("DeepSeek API 返回 " + response.code() + "：" + errorBody);
         }
 
         String responseBody = response.body() != null ? response.body().string() : "";
@@ -193,7 +196,7 @@ public class DeepSeekService {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> choices = (List<Map<String, Object>>) result.get("choices");
         if (choices == null || choices.isEmpty()) {
-            throw new RuntimeException("No choices in DeepSeek response");
+            throw new RuntimeException("DeepSeek 响应中没有 choices");
         }
 
         Map<String, Object> message = (Map<String, Object>) choices.get(0).get("message");

@@ -12,7 +12,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/graph")
-@Tag(name = "Graph", description = "Knowledge graph visualization API")
+@Tag(name = "知识图谱", description = "知识图谱可视化接口")
 public class GraphController {
 
     private final Neo4jService neo4jService;
@@ -22,7 +22,7 @@ public class GraphController {
     }
 
     @GetMapping
-    @Operation(summary = "Get graph data", description = "Get all nodes and edges for graph visualization")
+    @Operation(summary = "获取图谱数据", description = "获取全部节点和边，用于图谱可视化")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getGraph() {
         try {
             Map<String, Object> graph = neo4jService.getAllNodesAndRelations();

@@ -20,12 +20,12 @@ public class SyncService {
     private final KnowledgeGraphService knowledgeGraphService;
     private final OkHttpClient httpClient;
     
-    /** Polling interval in ms between pipeline status checks. Package-private for tests. */
+    /** 两次流水线状态轮询的间隔毫秒数。包内可见，便于测试。 */
     long pollIntervalMs = 2000;
     private final Map<String, SyncTask> tasks = new ConcurrentHashMap<>();
     private final ObjectMapper mapper = new ObjectMapper();
 
-    /** Production constructor — creates a default OkHttpClient. */
+    /** 生产环境构造函数——创建默认 OkHttpClient。 */
     @Autowired
     public SyncService(DocumentService documentService,
                         KnowledgeGraphService knowledgeGraphService) {
@@ -36,7 +36,7 @@ public class SyncService {
                         .build());
     }
 
-    /** Constructor with injectable OkHttpClient (for testing). */
+    /** 可注入 OkHttpClient 的构造函数（用于测试）。 */
     SyncService(DocumentService documentService,
                  KnowledgeGraphService knowledgeGraphService, OkHttpClient httpClient) {
         this.documentService = documentService;
@@ -53,9 +53,9 @@ public class SyncService {
 
         new Thread(() -> {
             try {
-                // ── Step 1: Call pipeline (extract now ingests via API, 0-85%) ──
+                // ── 步骤 1：调用流水线（抽取阶段现在通过 API 入库，0-85%）──
                 task.stage = "crawl+extract";
-                log.info("Calling pipeline: POST {}/pipeline/sync", pipelineUrl);
+                log.info("调用流水线：POST {}/pipeline/sync", pipelineUrl);
 
                 RequestBody emptyBody = RequestBody.create("", MediaType.parse("application/json"));
                 Request req = new Request.Builder().url(pipelineUrl + "/pipeline/sync").post(emptyBody).build();
@@ -66,7 +66,7 @@ public class SyncService {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> syncResp = mapper.readValue(respBody, Map.class);
                 String pipeTaskId = (String) syncResp.get("taskId");
-                log.info("Pipeline task started: {}", pipeTaskId);
+                log.info("流水线任务已启动：{}", pipeTaskId);
 
                 long deadline = System.currentTimeMillis() + 600_000;
                 Map<String, Object> pipelineResult = null;
@@ -103,22 +103,22 @@ public class SyncService {
                     return;
                 }
 
-                // ── Step 2: KG build (non-blocking, failure won't block sync) ──
+                // ── 步骤 2：构建知识图谱（非阻塞，失败不会阻断同步）──
                 task.stage = "knowledge-graph";
                 task.progress = 85;
-                log.info("Starting knowledge graph build (async)...");
+                log.info("开始构建知识图谱（异步）……");
                 try {
                     knowledgeGraphService.buildAll(
                             pct -> task.progress = 85 + pct * 14 / 100);
-                    log.info("Knowledge graph build completed");
+                    log.info("知识图谱构建完成");
                 } catch (Exception e) {
-                    log.warn("Knowledge graph build failed (sync continues): {}", e.getMessage());
+                    log.warn("知识图谱构建失败（同步流程继续）：{}", e.getMessage());
                 }
 
                 task.status = "done";
                 task.progress = 100;
             } catch (Exception e) {
-                log.error("Sync failed", e);
+                log.error("同步失败", e);
                 task.status = "failed";
                 task.error = e.getMessage();
             }

@@ -13,8 +13,8 @@ public class ClauseAlignmentService {
     );
 
     /**
-     * Verify clause numbers extracted by LLM match expected sequence.
-     * Returns issues list (empty = all good).
+     * 校验 LLM 抽取的条款编号是否符合预期序列。
+     * 返回问题列表（为空表示全部正常）。
      */
     public List<String> verify(List<Map<String, String>> clauses) {
         List<String> issues = new ArrayList<>();
@@ -24,13 +24,13 @@ public class ClauseAlignmentService {
             return issues;
         }
 
-        // Check first clause has expected pattern
+        // 检查首条是否符合预期格式
         String first = clauses.get(0).getOrDefault("clause_number", "");
         if (!first.matches("第.*条") && !first.matches("[一二三四五六七八九十]+、")) {
             issues.add("首条编号异常: '" + first + "'");
         }
 
-        // Check for duplicate clause numbers
+        // 检查是否存在重复条款号
         Set<String> seen = new HashSet<>();
         for (Map<String, String> c : clauses) {
             String num = c.getOrDefault("clause_number", "");
@@ -39,7 +39,7 @@ public class ClauseAlignmentService {
             }
         }
 
-        // Check text is non-empty
+        // 检查文本是否为空
         for (int i = 0; i < clauses.size(); i++) {
             String text = clauses.get(i).getOrDefault("text", "");
             if (text.trim().length() < 10) {
@@ -52,7 +52,7 @@ public class ClauseAlignmentService {
     }
 
     /**
-     * Extract clause numbers from raw text to cross-check LLM output.
+     * 从原始文本中抽取条款编号，用于交叉校验 LLM 输出。
      */
     public Set<String> extractClauseNumbers(String text) {
         Set<String> nums = new LinkedHashSet<>();
@@ -64,7 +64,7 @@ public class ClauseAlignmentService {
     }
 
     /**
-     * Count clauses found in text vs LLM output.
+     * 对比文本中识别到的条款数与 LLM 输出。
      */
     public String diff(Set<String> expected, List<Map<String, String>> actual) {
         Set<String> actualNums = new LinkedHashSet<>();

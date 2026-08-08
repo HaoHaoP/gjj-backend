@@ -15,7 +15,7 @@ public interface ChunkRepository extends JpaRepository<ChunkEntity, Long> {
     int countByDocumentId(String documentId);
     void deleteByDocumentId(String documentId);
 
-    /** Find up to 10 chunks whose text contains the given keyword (for concept linking). */
+    /** 查找文本包含指定关键字的至多 10 个分块（用于概念关联）。 */
     @Query("SELECT c FROM ChunkEntity c WHERE c.text LIKE %:keyword%")
     List<ChunkEntity> findTop10ByTextContaining(@Param("keyword") String keyword, Pageable pageable);
 }

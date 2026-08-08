@@ -16,29 +16,29 @@ public class ApiResponse<T> {
         this.data = data;
     }
 
-    // ── Factory methods ──
+    // ── 工厂方法 ──
 
-    /** Success with data (default message) */
+    /** 成功返回数据（默认消息） */
     public static <T> ApiResponse<T> ok(T data) {
-        return new ApiResponse<>(200, "success", data);
+        return new ApiResponse<>(200, "成功", data);
     }
 
-    /** Success with data and custom message */
+    /** 成功返回数据与自定义消息 */
     public static <T> ApiResponse<T> ok(T data, String msg) {
         return new ApiResponse<>(200, msg, data);
     }
 
-    /** Success without data (e.g. delete, feedback) */
+    /** 成功但不返回数据（如删除、反馈） */
     public static <T> ApiResponse<T> ok(String msg) {
         return new ApiResponse<>(200, msg, null);
     }
 
-    /** Failure */
+    /** 失败 */
     public static <T> ApiResponse<T> fail(int code, String msg) {
         return new ApiResponse<>(code, msg, null);
     }
 
-    // ── Getters / Setters ──
+    // ── Getter / Setter ──
     public int getCode() { return code; }
     public void setCode(int code) { this.code = code; }
     public String getMsg() { return msg; }

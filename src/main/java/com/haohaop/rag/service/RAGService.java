@@ -78,14 +78,14 @@ public class RAGService {
     }
 
     public QueryResponse query(String question) {
-        // Step 1: 向量检索
+        // 步骤 1：向量检索
         List<List<Float>> embeddings = embeddingService.encode(List.of(question));
         List<Float> queryEmbedding = embeddings.get(0);
         List<SearchHit> similarDocs = milvusService.searchSimilar(queryEmbedding, TOP_K);
 
-        // Step 2: 陷阱题判断 — Top-1 阈值过滤
+        // 步骤 2：陷阱题判断 — Top-1 阈值过滤
         if (similarDocs.isEmpty() || similarDocs.get(0).score() < similarityThreshold) {
-            log.info("Trap question rejected (max score: {})",
+            log.info("陷阱题已拒答（最高得分：{}）",
                     similarDocs.isEmpty() ? 0 : similarDocs.get(0).score());
             return new QueryResponse(
                 "您咨询的问题在南宁住房公积金现行政策中未找到明确规定。建议您核实问题后重新提问，或拨打南宁公积金服务热线 12329 咨询。",
@@ -96,7 +96,7 @@ public class RAGService {
             );
         }
 
-        // Step 3: KG 查引用关系（仅对达标 chunk）
+        // 步骤 3：查询知识图谱引用关系（仅对达标 chunk）
         List<KgRelation> kgRelations = new ArrayList<>();
         Set<String> kgDocTitles = new LinkedHashSet<>();
         for (int i = 0; i < Math.min(KG_INPUT_LIMIT, similarDocs.size()); i++) {
@@ -109,7 +109,7 @@ public class RAGService {
             }
         }
 
-        // Step 4: KG 回检 — 去重后查 Milvus 拿引用文档原文
+        // 步骤 4：知识图谱回检 — 去重后查 Milvus 拿引用文档原文
         Set<String> existingTitles = similarDocs.stream()
                 .map(SearchHit::title).collect(Collectors.toSet());
         List<SearchHit> kgHits = new ArrayList<>();
@@ -125,7 +125,7 @@ public class RAGService {
             }
         }
 
-        // Step 5: 构建带序号引用的上下文（A 类在前，B 类去重后追加）
+        // 步骤 5：构建带序号引用的上下文（A 类在前，B 类去重后追加）
         List<String> numberedSources = new ArrayList<>();
         List<SourceInfo> sourceInfoList = new ArrayList<>();
         int idx = 1;
@@ -151,29 +151,29 @@ public class RAGService {
         }
         String context = String.join("\n", numberedSources);
 
-        // Step 6: LLM 生成（中文 prompt，要求 [1][2] 引用）
+        // 步骤 6：LLM 生成（中文提示词，要求 [1][2] 引用）
         String userMessage = "政策条文：\n" + context + "\n\n用户问题：" + question;
         String answer = deepSeekService.chat(SYSTEM_PROMPT, userMessage);
 
-        // Step 7: LLM 二次判断 — 正则匹配拒答关键词
+        // 步骤 7：LLM 二次判断 — 正则匹配拒答关键词
         boolean rejected = REJECT_PATTERN.matcher(answer).find();
 
-        // Step 8: 引用编号校验
+        // 步骤 8：引用编号校验
         int totalSources = sourceInfoList.size();
         validateCitations(answer, totalSources);
 
-        log.info("RAG query: {} sources, {} KG relations, rejected={}",
+        log.info("RAG 查询：{} 个来源，{} 条图谱关系，是否拒答={}",
                 sourceInfoList.size(), kgRelations.size(), rejected);
 
         return new QueryResponse(answer, sourceInfoList, rejected, kgRelations);
     }
 
     /**
-     * Streaming version: RAG retrieval + SSE token-by-token response + follow-up suggestions.
+     * 流式版本：RAG 检索 + SSE 逐字返回 + 追问建议。
      */
     public void askStream(String question, boolean deepThinking, SseEmitter emitter) {
         try {
-            // Step 1-5: Same RAG retrieval as query()
+            // 步骤 1-5：与 query() 相同的 RAG 检索流程
             List<List<Float>> embeddings = embeddingService.encode(List.of(question));
             List<Float> queryEmbedding = embeddings.get(0);
             List<SearchHit> similarDocs = milvusService.searchSimilar(queryEmbedding, TOP_K);
@@ -237,7 +237,7 @@ public class RAGService {
             String context = String.join("\n", numberedSources);
             String userMessage = "政策条文：\n" + context + "\n\n用户问题：" + question;
 
-            // Step 6: Stream answer via SSE
+            // 步骤 6：通过 SSE 流式返回回答
             StringBuilder fullAnswer = new StringBuilder();
 
             try {
@@ -253,34 +253,34 @@ public class RAGService {
                         emitter.send(SseEmitter.event().name("token").data(objectMapper.writeValueAsString(token)));
                     }
                 } catch (Exception e) {
-                    log.debug("SSE send interrupted", e);
+                    log.debug("SSE 发送中断", e);
                 }
             }, deepThinking);
 
-            // Step 7: Send sources
+            // 步骤 7：发送引用来源
             try {
                 emitter.send(SseEmitter.event().name("sources")
                         .data(objectMapper.writeValueAsString(sourceInfoList)));
             } catch (Exception e) {
-                log.warn("Failed to send sources", e);
+                log.warn("发送引用来源失败", e);
             }
 
-            // Step 8: Generate follow-up suggestions
+            // 步骤 8：生成追问建议
             try {
                 List<String> suggestions = generateSuggestions(question, fullAnswer.toString());
                 emitter.send(SseEmitter.event().name("suggestions")
                         .data(objectMapper.writeValueAsString(suggestions)));
             } catch (Exception e) {
-                log.warn("Failed to generate suggestions", e);
+                log.warn("生成追问建议失败", e);
                 emitter.send(SseEmitter.event().name("suggestions").data("[]"));
             }
 
-            // Step 9: Done
+            // 步骤 9：完成
             emitter.send(SseEmitter.event().name("done").data(""));
             emitter.complete();
 
         } catch (Exception e) {
-            log.error("Streaming RAG failed", e);
+            log.error("流式 RAG 查询失败", e);
             try {
                 emitter.send(SseEmitter.event().name("error").data(e.getMessage()));
                 emitter.completeWithError(e);
@@ -299,7 +299,7 @@ public class RAGService {
                 return list.stream().map(Object::toString).limit(3).toList();
             }
         } catch (Exception e) {
-            log.warn("Suggestions generation failed: {}", e.getMessage());
+            log.warn("追问建议生成失败：{}", e.getMessage());
         }
         return List.of();
     }
@@ -309,7 +309,7 @@ public class RAGService {
         while (m.find()) {
             int n = Integer.parseInt(m.group(1));
             if (n > totalSources) {
-                log.warn("Citation [{}] exceeds source count ({})", n, totalSources);
+                log.warn("引用编号 [{}] 超出引用来源总数（{}）", n, totalSources);
             }
         }
     }

@@ -11,7 +11,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/chunks")
-@Tag(name = "Chunks", description = "Chunk detail API")
+@Tag(name = "分块", description = "分块详情接口")
 public class ChunkController {
 
     private final DocumentService documentService;
@@ -21,7 +21,7 @@ public class ChunkController {
     }
 
     @GetMapping("/{id}")
-    @Operation(summary = "Get chunk detail", description = "Get single chunk metadata by its ID")
+    @Operation(summary = "获取分块详情", description = "根据分块 ID 获取单个分块元数据")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getChunk(@PathVariable long id) {
         var chunk = documentService.getById(id);
         return ResponseEntity.ok(ApiResponse.ok(Map.of(

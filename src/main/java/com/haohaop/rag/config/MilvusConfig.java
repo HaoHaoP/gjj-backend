@@ -19,7 +19,7 @@ public class MilvusConfig {
 
     @Bean
     public MilvusServiceClient milvusServiceClient() {
-        log.info("Connecting to Milvus at {}:{}", host, port);
+        log.info("正在连接 Milvus：{}:{}", host, port);
         ConnectParam connectParam = ConnectParam.newBuilder()
                 .withHost(host)
                 .withPort(port)

@@ -21,7 +21,7 @@ public class GlobalExceptionHandler {
         Map<String, String> errors = ex.getBindingResult().getFieldErrors().stream()
                 .collect(Collectors.toMap(
                         FieldError::getField,
-                        e -> e.getDefaultMessage() != null ? e.getDefaultMessage() : "invalid",
+                        e -> e.getDefaultMessage() != null ? e.getDefaultMessage() : "无效",
                         (a, b) -> a
                 ));
         return ResponseEntity.badRequest()
@@ -36,14 +36,14 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResponse<Void>> handleRuntime(RuntimeException ex) {
-        log.error("Unexpected error", ex);
+        log.error("未预期的错误", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiResponse.fail(500, ex.getMessage()));
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleGeneric(Exception ex) {
-        log.error("Unhandled exception", ex);
+        log.error("未处理的异常", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiResponse.fail(500, "服务器内部错误"));
     }

@@ -50,7 +50,7 @@ public class MilvusService {
                 .withCollectionName(COLLECTION_NAME)
                 .build());
         if (hasResp.getData() != null && hasResp.getData()) {
-            log.info("Collection '{}' already exists", COLLECTION_NAME);
+            log.info("集合『{}』已存在", COLLECTION_NAME);
             return;
         }
 
@@ -87,13 +87,13 @@ public class MilvusService {
 
         CreateCollectionParam createParam = CreateCollectionParam.newBuilder()
                 .withCollectionName(COLLECTION_NAME)
-                .withDescription("RAG document chunks v2 with document_id")
+                .withDescription("带 document_id 的 RAG 文档分块 v2")
                 .withFieldTypes(List.of(idField, titleField, chunkTextField, documentIdField, embeddingField))
                 .build();
 
         R<RpcStatus> createResp = milvusClient.createCollection(createParam);
-        handleResponse(createResp, "Failed to create collection");
-        log.info("Created collection '{}'", COLLECTION_NAME);
+        handleResponse(createResp, "创建集合失败");
+        log.info("已创建集合『{}』", COLLECTION_NAME);
 
         CreateIndexParam indexParam = CreateIndexParam.newBuilder()
                 .withCollectionName(COLLECTION_NAME)
@@ -102,13 +102,13 @@ public class MilvusService {
                 .withMetricType(MetricType.COSINE)
                 .build();
         R<RpcStatus> indexResp = milvusClient.createIndex(indexParam);
-        handleResponse(indexResp, "Failed to create index");
+        handleResponse(indexResp, "创建索引失败");
 
         R<RpcStatus> loadResp = milvusClient.loadCollection(LoadCollectionParam.newBuilder()
                 .withCollectionName(COLLECTION_NAME)
                 .build());
-        handleResponse(loadResp, "Failed to load collection");
-        log.info("Loaded collection '{}' into memory", COLLECTION_NAME);
+        handleResponse(loadResp, "加载集合失败");
+        log.info("集合『{}』已加载到内存", COLLECTION_NAME);
     }
 
     private void handleResponse(R<RpcStatus> resp, String errorMsg) {
@@ -127,7 +127,7 @@ public class MilvusService {
                     if (bytes > 4096) {
                         String preview = t.substring(0, 200);
                         throw new IllegalArgumentException(
-                                "Chunk text exceeds Milvus varchar(4096 UTF-8 bytes): bytes=" + bytes
+                                "分块文本超过 Milvus varchar(4096 UTF-8 字节) 限制：bytes=" + bytes
                                 + ", chars=" + t.length() + ", preview=" + preview + "...");
                     }
                     return t;
@@ -148,12 +148,12 @@ public class MilvusService {
 
         R<MutationResult> insertResp = milvusClient.insert(insertParam);
         if (insertResp.getException() != null) {
-            throw new RuntimeException("Failed to insert: " + insertResp.getException().getMessage());
+            throw new RuntimeException("插入失败：" + insertResp.getException().getMessage());
         }
 
         MutationResult result = insertResp.getData();
-        log.info("Inserted {} chunks into Milvus for doc {}",
-                result.getIDs().getIntId().getDataList().size(), documentId);
+        log.info("已为文档 {} 向 Milvus 插入 {} 个分块",
+                documentId, result.getIDs().getIntId().getDataList().size());
     }
 
     public List<SearchHit> searchSimilar(List<Float> queryEmbedding, int topK) {
@@ -171,7 +171,7 @@ public class MilvusService {
 
         R<SearchResults> searchResp = milvusClient.search(searchParam);
         if (searchResp.getException() != null) {
-            throw new RuntimeException("Search failed: " + searchResp.getException().getMessage());
+            throw new RuntimeException("搜索失败：" + searchResp.getException().getMessage());
         }
 
         SearchResultsWrapper wrapper = new SearchResultsWrapper(searchResp.getData().getResults());
@@ -191,7 +191,7 @@ public class MilvusService {
                 List<?> chunkData = wrapper.getFieldData("chunk_text", 0);
                 if (chunkData != null && i < chunkData.size()) chunkText = String.valueOf(chunkData.get(i));
             } catch (Exception e) {
-                log.warn("Failed to extract field data from search result", e);
+                log.warn("从搜索结果中提取字段数据失败", e);
             }
 
             hits.add(new SearchHit(id, title, chunkText, score));
@@ -222,7 +222,7 @@ public class MilvusService {
                 .build());
 
         if (queryResp.getException() != null) {
-            throw new RuntimeException("Query failed: " + queryResp.getException().getMessage());
+            throw new RuntimeException("查询失败：" + queryResp.getException().getMessage());
         }
         return extractDocumentList(queryResp.getData());
     }
@@ -234,7 +234,7 @@ public class MilvusService {
                 .build());
 
         if (deleteResp.getException() != null) {
-            throw new RuntimeException("Delete failed: " + deleteResp.getException().getMessage());
+            throw new RuntimeException("删除失败：" + deleteResp.getException().getMessage());
         }
     }
 
@@ -268,6 +268,6 @@ public class MilvusService {
     @PreDestroy
     public void cleanup() {
         milvusClient.close();
-        log.info("Closed Milvus client");
+        log.info("已关闭 Milvus 客户端");
     }
 }

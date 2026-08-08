@@ -10,11 +10,11 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 
 @RestController
-@Tag(name = "Health", description = "Health check endpoint")
+@Tag(name = "健康检查", description = "健康检查端点")
 public class HealthController {
 
     @GetMapping("/api/health")
-    @Operation(summary = "Health check", description = "Returns OK if the service is running")
+    @Operation(summary = "健康检查", description = "服务运行正常时返回 OK")
     public ResponseEntity<ApiResponse<Map<String, String>>> health() {
         return ResponseEntity.ok(ApiResponse.ok(Map.of("status", "UP")));
     }

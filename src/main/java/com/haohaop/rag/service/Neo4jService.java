@@ -32,7 +32,7 @@ public class Neo4jService {
     public void init() {
         this.driver = GraphDatabase.driver(uri, AuthTokens.basic(username, password));
         ensureIndexes();
-        log.info("Neo4j connected to {}", uri);
+        log.info("已连接 Neo4j：{}", uri);
     }
 
     @PreDestroy
@@ -40,7 +40,7 @@ public class Neo4jService {
         if (driver != null) driver.close();
     }
 
-    // ========== Indexes ==========
+    // ========== 索引 ==========
 
     private void ensureIndexes() {
         try (Session session = driver.session()) {
@@ -49,25 +49,25 @@ public class Neo4jService {
             session.run("CREATE INDEX IF NOT EXISTS FOR (c:Clause) ON (c.clauseNumber)");
             session.run("CREATE INDEX IF NOT EXISTS FOR (c:Concept) ON (c.name)");
         } catch (Exception e) {
-            log.warn("Failed to create Neo4j indexes: {}", e.getMessage());
+            log.warn("创建 Neo4j 索引失败：{}", e.getMessage());
         }
     }
 
-    // ========== Write Operations ==========
+    // ========== 写操作 ==========
 
-    /** Delete all nodes and relationships. */
+    /** 删除所有节点和关系。 */
     public void clearAll() {
         try (Session session = driver.session()) {
             session.run("MATCH (n) DETACH DELETE n");
-            log.info("Neo4j graph cleared");
+            log.info("Neo4j 图谱已清空");
         } catch (Exception e) {
-            log.error("Failed to clear Neo4j graph", e);
-            throw new RuntimeException("Neo4j clearAll failed", e);
+            log.error("清空 Neo4j 图谱失败", e);
+            throw new RuntimeException("Neo4j clearAll 失败", e);
         }
 
     }
 
-    /** Delete all graph nodes for a specific document. */
+    /** 删除指定文档的全部图谱节点。 */
     public void deleteByDocumentId(String documentId) {
         String cypher = """
             MATCH (p:Policy {documentId: $documentId})
@@ -76,12 +76,12 @@ public class Neo4jService {
             DETACH DELETE p
         """;
         executeWrite(cypher, Map.of("documentId", documentId));
-        log.info("Neo4j: deleted graph for document {}", documentId);
+        log.info("Neo4j：已删除文档 {} 的图谱", documentId);
     }
 
-    /** Create or merge a Policy node. */
+    /** 创建或合并政策（Policy）节点。 */
 
-    /** Create or merge a Policy node. */
+    /** 创建或合并政策（Policy）节点。 */
     public void createPolicyNode(String documentId, String title, String source) {
         String cypher = """
             MERGE (p:Policy {title: $title})
@@ -91,7 +91,7 @@ public class Neo4jService {
         executeWrite(cypher, Map.of("documentId", documentId, "title", title, "source", source));
     }
 
-    /** Create a Clause node linked to its parent Policy via CONTAINS. */
+    /** 创建条款（Clause）节点，并通过 CONTAINS 关联到其所属政策。 */
     public void createClauseNode(String policyTitle, String clauseNumber, String textSnippet, String clauseId) {
         String cypher = """
             MATCH (p:Policy {title: $policyTitle})
@@ -104,7 +104,7 @@ public class Neo4jService {
                 "text", abbreviate(textSnippet, 300), "clauseId", clauseId));
     }
 
-    /** Create a Chapter node. */
+    /** 创建章（Chapter）节点。 */
     public void createChapterNode(String policyTitle, String chapterNumber, String chapterTitle) {
         String key = policyTitle + "||" + chapterNumber;
         String cypher = """
@@ -118,7 +118,7 @@ public class Neo4jService {
                 chapterTitle != null ? chapterTitle : chapterNumber));
     }
 
-    /** Append intro text to a Chapter node (for chapter-intro chunks in MARKDOWN mode). */
+    /** 向章节点追加引言文本（用于 MARKDOWN 模式下的章引言分块）。 */
     public void appendChapterText(String policyTitle, String chapterNumber, String text) {
         String key = policyTitle + "||" + chapterNumber;
         String cypher = """
@@ -128,7 +128,7 @@ public class Neo4jService {
         executeWrite(cypher, Map.of("key", key, "text", abbreviate(text, 500)));
     }
 
-    /** Create a MENTIONS relationship: Chapter -[:MENTIONS]-> Concept. */
+    /** 创建 MENTIONS 关系：Chapter -[:MENTIONS]-> Concept。 */
     public void createChapterMentionsRelation(String policyTitle, String chapterNumber, String conceptName) {
         String key = policyTitle + "||" + chapterNumber;
         String cypher = """
@@ -140,7 +140,7 @@ public class Neo4jService {
         executeWrite(cypher, Map.of("key", key, "conceptName", conceptName));
     }
 
-    /** Link a Clause to its parent Chapter. */
+    /** 将条款关联到其所属章。 */
     public void linkClauseToChapter(String policyTitle, String chapterNumber, String clauseNumber) {
         String key = policyTitle + "||" + chapterNumber;
         String cypher = """
@@ -152,7 +152,7 @@ public class Neo4jService {
 
     }
 
-    /** Create a Section node. */
+    /** 创建节（Section）节点。 */
     public void createSectionNode(String policyTitle, String chapterNumber, String sectionNumber) {
         String chapterKey = policyTitle + "||" + chapterNumber;
         String sectionKey = chapterKey + "||" + sectionNumber;
@@ -166,7 +166,7 @@ public class Neo4jService {
                 "sectionNumber", sectionNumber));
     }
 
-    /** Link a Clause to its parent Section. */
+    /** 将条款关联到其所属节。 */
     public void linkClauseToSection(String policyTitle, String chapterNumber,
                                      String sectionNumber, String clauseNumber) {
         String chapterKey = policyTitle + "||" + chapterNumber;
@@ -180,9 +180,9 @@ public class Neo4jService {
     }
 
     /**
-     * Create a cross-document reference: Clause -[REL_TYPE]-> Policy.
-     * Sanitizes relationType to a valid Cypher label (A-Z, _).
-     * Uses CREATE since graph is fully rebuilt after clearAll.
+     * 创建跨文档引用关系：Clause -[REL_TYPE]-> Policy。
+     * 将 relationType 清洗为合法的 Cypher 标签（A-Z、_）。
+     * 由于 clearAll 后图谱会完全重建，这里使用 CREATE。
      */
     public void createCrossReference(String fromClauseNumber, String relationType,
                                       String toPolicyTitle, String evidence) {
@@ -199,7 +199,7 @@ public class Neo4jService {
                 "toTitle", toPolicyTitle, "evidence", abbreviate(evidence, 200)));
     }
 
-    /** Create a Concept node. */
+    /** 创建概念（Concept）节点。 */
     public void createConceptNode(String name, String description) {
         String cypher = """
             MERGE (c:Concept {name: $name})
@@ -209,7 +209,7 @@ public class Neo4jService {
         executeWrite(cypher, Map.of("name", name, "description", description));
     }
 
-    /** Create a MENTIONS relationship: Clause -[:MENTIONS]-> Concept. */
+    /** 创建 MENTIONS 关系：Clause -[:MENTIONS]-> Concept。 */
     public void createMentionsRelation(String clauseNumber, String conceptName, String evidence) {
         String cypher = """
             MATCH (c:Clause {clauseNumber: $clauseNumber})
@@ -219,7 +219,7 @@ public class Neo4jService {
         executeWrite(cypher, Map.of("clauseNumber", clauseNumber, "conceptName", conceptName));
     }
 
-    // ========== Read Operations ==========
+    // ========== 读操作 ==========
 
     public List<KgRelation> findRelations(String policyTitle) {
         String query = """
@@ -246,8 +246,8 @@ public class Neo4jService {
 
 
     /**
-     * Get all nodes and relationships from the graph for visualization.
-     * Returns nodes with id, type, label, and edges with source, target, type.
+     * 获取图谱中的全部节点和关系，用于可视化。
+     * 返回带 id、type、label 的节点，以及带 source、target、type 的边。
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> getAllNodesAndRelations() {
@@ -283,7 +283,7 @@ public class Neo4jService {
                 edges.add(edge);
             }
         } catch (Exception e) {
-            log.warn("Neo4j graph query failed: {}", e.getMessage());
+            log.warn("Neo4j 图谱查询失败：{}", e.getMessage());
         }
 
         result.put("nodes", nodes);
@@ -291,7 +291,7 @@ public class Neo4jService {
         return result;
     }
 
-    // ========== Helpers ==========
+    // ========== 辅助方法 ==========
 
     private String sanitizeRelType(String raw) {
         return raw.replaceAll("[^A-Z_]", "");
@@ -308,7 +308,7 @@ public class Neo4jService {
                 results.add(row);
             }
         } catch (Exception e) {
-            log.warn("Neo4j query failed: {}", e.getMessage());
+            log.warn("Neo4j 查询失败：{}", e.getMessage());
         }
         return results;
     }
@@ -320,8 +320,8 @@ public class Neo4jService {
                 return null;
             });
         } catch (Exception e) {
-            log.error("Neo4j write failed: {} — params: {}", e.getMessage(), params.keySet());
-            throw new RuntimeException("Neo4j write failed", e);
+            log.error("Neo4j 写入失败：{} — 参数：{}", e.getMessage(), params.keySet());
+            throw new RuntimeException("Neo4j 写入失败", e);
         }
     }
 

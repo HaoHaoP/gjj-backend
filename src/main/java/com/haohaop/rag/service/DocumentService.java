@@ -29,19 +29,19 @@ public class DocumentService {
     private final KnowledgeGraphService knowledgeGraphService;
     private final MinioService minioService;
 
-    /** Self-injection so @Transactional works when called from thread pool. */
+    /** 自注入，确保从线程池调用时 @Transactional 生效。 */
     @org.springframework.beans.factory.annotation.Autowired
     @org.springframework.context.annotation.Lazy
     private DocumentService self;
 
-    /** Milvus varchar(4096) max UTF-8 bytes. */
+    /** Milvus varchar(4096) 的最大 UTF-8 字节数。 */
     private static final int MAX_CHUNK_BYTES = 4096;
 
-    /** Pattern for sub-item markers like （一）（二） or 1、2、 */
+    /** 匹配子项标记的正则，如（一）（二）或 1、2、 */
     private static final Pattern ITEM_PATTERN =
             Pattern.compile("([（(][一二三四五六七八九十百千]+[）)]|\\d+[、。．])");
 
-    // ── UTF-8 helpers ──
+    // ── UTF-8 工具方法 ──
 
     private static int utf8Bytes(String s) {
         return s.getBytes(StandardCharsets.UTF_8).length;
@@ -93,7 +93,7 @@ public class DocumentService {
         this.knowledgeGraphService = knowledgeGraphService;
     }
 
-    // ========== Document-level APIs ==========
+    // ========== 文档级接口 ==========
 
     public Map<String, Object> listDocuments(int page, int size, String keyword) {
         Page<DocumentEntity> pageResult;
@@ -113,7 +113,7 @@ public class DocumentService {
 
     public DocumentSummaryResponse getDocument(String documentId) {
         DocumentEntity d = documentRepository.findByDocumentId(documentId)
-                .orElseThrow(() -> new NoSuchElementException("Document not found: " + documentId));
+                .orElseThrow(() -> new NoSuchElementException("文档不存在：" + documentId));
         return DocumentSummaryResponse.from(d);
     }
 
@@ -128,19 +128,19 @@ public class DocumentService {
 
     public String getDownloadUrl(String documentId) {
         DocumentEntity d = documentRepository.findByDocumentId(documentId)
-                .orElseThrow(() -> new NoSuchElementException("Document not found: " + documentId));
+                .orElseThrow(() -> new NoSuchElementException("文档不存在：" + documentId));
         if (d.getMinioPath() == null) {
-            throw new NoSuchElementException("No original file for document: " + documentId);
+            throw new NoSuchElementException("文档没有原始文件：" + documentId);
         }
         try {
             return minioService.getPresignedUrl(d.getMinioPath(),
                     d.getOriginalFilename() != null ? d.getOriginalFilename() : d.getTitle() + ".html");
         } catch (Exception e) {
-            throw new RuntimeException("Failed to generate download URL", e);
+            throw new RuntimeException("生成下载地址失败", e);
         }
     }
 
-    // ========== Ingest / Create ==========
+    // ========== 入库 / 创建 ==========
 
     @Transactional
     public Map<String, Object> ingest(String title, String content, String source,
@@ -150,15 +150,15 @@ public class DocumentService {
         Map<String, Object> result = ingestInternal(title, content,
                 minioPath, originalFilename, fileSize, source, chunkSize, overlapSize, chunkMode);
 
-        // Write to MinIO AFTER successful ingest — MinIO file = fully processed document
+        // 入库成功后再写入 MinIO——MinIO 中的文件即为完整处理后的文档
         if (minioPath != null && !minioPath.isBlank()) {
             try {
                 byte[] bytes = content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
                 minioService.upload(minioPath, new java.io.ByteArrayInputStream(bytes),
                         bytes.length, "text/markdown");
-                log.info("MinIO upload complete: {}", minioPath);
+                log.info("MinIO 上传完成：{}", minioPath);
             } catch (Exception e) {
-                log.error("MinIO upload failed after ingest (data already in PG/Milvus): {}", minioPath, e);
+                log.error("入库后 MinIO 上传失败（数据已在 PG/Milvus 中）：{}", minioPath, e);
             }
         }
         return result;
@@ -178,13 +178,13 @@ public class DocumentService {
                 minioService.upload(minioPath, new java.io.ByteArrayInputStream(bytes),
                         bytes.length, "text/html");
             } catch (Exception e) {
-                log.warn("Failed to upload to MinIO: {}", e.getMessage());
+                log.warn("上传到 MinIO 失败：{}", e.getMessage());
                 minioPath = null;
             }
             return ingestInternal(title, text, minioPath, safeFilename, bytes.length, source,
                     chunkSize, overlapSize, chunkMode);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to ingest file: " + e.getMessage(), e);
+            throw new RuntimeException("文件入库失败：" + e.getMessage(), e);
         }
     }
 
@@ -193,45 +193,45 @@ public class DocumentService {
                                                 String source, int chunkSize, int overlapSize, String chunkMode) {
         String documentId = UUID.randomUUID().toString();
 
-        // Use structured chunking for CLAUSE mode to capture clauseNumber and parentTitle
+        // CLAUSE 模式使用结构化分块，以获取条款编号和父级标题
         List<ChunkingService.ChunkSegment> rawSegments =
                 chunkingService.chunkStructured(content, chunkSize, overlapSize, chunkMode);
 
-        // Split long segments at item/sub-item boundaries, preserving clause metadata
+        // 在条目/子条目边界拆分过长分块，保留条款元数据
         List<ChunkingService.ChunkSegment> segments = splitLongSegments(rawSegments);
 
-        // Build chunk lists
+        // 构建分块列表
         List<String> chunkTexts = new ArrayList<>();
         List<String> clauseNumbers = new ArrayList<>();
         List<String> parentTitles = new ArrayList<>();
-        List<String> pgTexts = new ArrayList<>(); // full text for PG
+        List<String> pgTexts = new ArrayList<>(); // PG 中保存的完整文本
 
         for (ChunkingService.ChunkSegment seg : segments) {
             String milvusText = seg.text().length() > MAX_CHUNK_BYTES
                     ? truncateUtf8(seg.text(), MAX_CHUNK_BYTES) : seg.text();
             chunkTexts.add(milvusText);
-            pgTexts.add(seg.text()); // PG stores full text
+            pgTexts.add(seg.text()); // PG 保存完整文本
             clauseNumbers.add(seg.clauseNumber());
             parentTitles.add(buildParentTitle(title, seg.chapterTitle(), seg.sectionTitle()));
         }
 
         if (chunkTexts.isEmpty()) {
-            log.warn("No chunks generated for document '{}'", title);
+            log.warn("文档『{}』未生成任何分块", title);
             return Map.of("documentId", documentId, "chunks", 0);
         }
 
-        // 1. Encode + Milvus (truncated text)
+        // 1. 向量化并写入 Milvus（截断后的文本）
         List<String> titles = new ArrayList<>(Collections.nCopies(chunkTexts.size(), title));
         List<List<Float>> embeddings = embeddingService.encodeBatch(chunkTexts);
         milvusService.insertChunks(documentId, titles, chunkTexts, embeddings);
 
-        // 2. Write Document to PG
+        // 2. 写入 Document 到 PG
         DocumentEntity doc = new DocumentEntity(documentId, title, source,
                 segments.size(), chunkSize, overlapSize, chunkMode,
                 minioPath, originalFilename, fileSize);
         documentRepository.save(doc);
 
-        // 3. Write Chunks to PG with full text and clause metadata
+        // 3. 将完整文本及条款元数据写入 Chunks 到 PG
         List<ChunkEntity> chunkEntities = new ArrayList<>();
         for (int i = 0; i < pgTexts.size(); i++) {
             chunkEntities.add(new ChunkEntity(documentId, i + 1, pgTexts.get(i),
@@ -239,15 +239,15 @@ public class DocumentService {
         }
         chunkRepository.saveAll(chunkEntities);
 
-        log.info("Ingested document '{}': {} chunks ({} expanded from long clauses)",
+        log.info("文档『{}』入库完成：{} 个分块（其中 {} 个由长条款拆分而来）",
                 title, segments.size(),
                 segments.size() - rawSegments.size());
         return Map.of("documentId", documentId, "chunks", segments.size(), "title", title);
     }
 
     /**
-     * Split segments that exceed MAX_CHUNK_BYTES at item boundaries.
-     * Each sub-chunk inherits the same clause metadata for context association.
+     * 在条目边界拆分超过 MAX_CHUNK_BYTES 的分块。
+     * 每个子分块继承相同的条款元数据，便于上下文关联。
      */
     private List<ChunkingService.ChunkSegment> splitLongSegments(
             List<ChunkingService.ChunkSegment> raw) {
@@ -259,7 +259,7 @@ public class DocumentService {
                 continue;
             }
 
-            log.debug("Splitting long clause '{}' ({} chars)", seg.clauseNumber(), seg.text().length());
+            log.debug("正在拆分长条款『{}』（{} 字符）", seg.clauseNumber(), seg.text().length());
             List<String> parts = splitAtItems(seg.text());
 
             for (String part : parts) {
@@ -271,8 +271,8 @@ public class DocumentService {
     }
 
     /**
-     * Split text at item markers like （一）（二） or sentence breaks.
-     * Falls back to sentence break if no items found.
+     * 在条目标记（如（一）（二））或句子边界处拆分文本。
+     * 若未找到条目标记，则回退为按句拆分。
      */
     private List<String> splitAtItems(String text) {
         List<String> parts = new ArrayList<>();
@@ -284,7 +284,7 @@ public class DocumentService {
         }
 
         if (positions.size() >= 2) {
-            // Split at item boundaries
+            // 在条目边界处拆分
             if (positions.get(0) > 0) {
                 parts.add(text.substring(0, positions.get(0)).trim());
             }
@@ -297,11 +297,11 @@ public class DocumentService {
                 }
             }
         } else {
-            // No item markers — split at sentence boundaries
+            // 没有条目标记——按句子边界拆分
             parts = splitAtSentences(text);
         }
 
-        // If any part is still too long, hard-truncate
+        // 若仍有部分过长，则强制截断
         List<String> finalParts = new ArrayList<>();
         for (String p : parts) {
             if (utf8Bytes(p) > MAX_CHUNK_BYTES) {
@@ -313,7 +313,7 @@ public class DocumentService {
         return finalParts;
     }
 
-    /** Split at sentence boundaries (。！？\n), merging until close to MAX_CHUNK_BYTES. */
+    /** 按句子边界（。！？\n）拆分，合并至接近 MAX_CHUNK_BYTES。 */
     private List<String> splitAtSentences(String text) {
         List<String> result = new ArrayList<>();
         StringBuilder buf = new StringBuilder();
@@ -355,11 +355,11 @@ public class DocumentService {
             result.add(buf.toString().trim());
         }
 
-        // If only one part (can't split), keep as-is
+        // 若只有一部分（无法拆分），保持原样
         return result.size() <= 1 ? List.of(text) : result;
     }
 
-    /** Find the last sentence-ending char within the buffer. Returns the position after it, or -1. */
+    /** 在缓冲区中查找最后一个句子结束符。返回其后的位置，若不存在返回 -1。 */
     private int findLastSentenceEnd(CharSequence buf) {
         for (int j = buf.length() - 1; j >= 0; j--) {
             char c = buf.charAt(j);
@@ -378,7 +378,7 @@ public class DocumentService {
         return sb.toString();
     }
 
-    // ========== Delete ==========
+    // ========== 删除 ==========
 
     @Transactional
     public void deleteDocument(String documentId) {
@@ -387,7 +387,7 @@ public class DocumentService {
             try {
                 String prefix = doc.getMinioPath().substring(0, doc.getMinioPath().indexOf('/') + 1);
                 minioService.deletePrefix(prefix);
-            } catch (Exception e) { log.warn("MinIO delete failed: {}", e.getMessage()); }
+            } catch (Exception e) { log.warn("MinIO 删除失败：{}", e.getMessage()); }
         }
         milvusService.deleteByDocumentId(documentId);
         chunkRepository.deleteByDocumentId(documentId);
@@ -395,9 +395,9 @@ public class DocumentService {
         try {
             knowledgeGraphService.deleteByDocumentId(documentId);
         } catch (Exception e) {
-            log.warn("KG cleanup failed for document {}: {}", documentId, e.getMessage());
+            log.warn("文档 {} 的知识图谱清理失败：{}", documentId, e.getMessage());
         }
-        log.info("Deleted document: {}", documentId);
+        log.info("已删除文档：{}", documentId);
     }
 
     @Transactional
@@ -405,7 +405,7 @@ public class DocumentService {
         milvusService.deleteById(chunkId);
         chunkRepository.deleteById(chunkId);
         DocumentEntity doc = documentRepository.findByDocumentId(documentId)
-                .orElseThrow(() -> new NoSuchElementException("Document not found: " + documentId));
+                .orElseThrow(() -> new NoSuchElementException("文档不存在：" + documentId));
         doc.setChunkCount(Math.max(0, doc.getChunkCount() - 1));
         doc.setUpdatedAt(LocalDateTime.now());
         documentRepository.save(doc);
@@ -421,10 +421,10 @@ public class DocumentService {
         for (String id : documentIds) {
             futures.add(executor.submit(() -> {
                 try {
-                    self.deleteDocument(id);  // via proxy → @Transactional works
+                    self.deleteDocument(id);  // 通过代理调用 → @Transactional 生效
                     deleted.incrementAndGet();
                 } catch (Exception e) {
-                    log.warn("Batch delete failed for {}: {}", id, e.getMessage());
+                    log.warn("批量删除失败（{}）：{}", id, e.getMessage());
                 }
             }));
         }

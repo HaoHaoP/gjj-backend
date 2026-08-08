@@ -18,7 +18,7 @@ public class FeedbackService {
     public void save(String question, String answer, String rating) {
         FeedbackEntity entity = new FeedbackEntity(question, answer, rating);
         feedbackRepository.save(entity);
-        log.info("Feedback saved: rating={}, question={}", rating,
+        log.info("反馈已保存：评分={}，问题={}", rating,
                 question.substring(0, Math.min(50, question.length())));
     }
 }

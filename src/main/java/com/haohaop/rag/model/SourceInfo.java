@@ -2,10 +2,10 @@ package com.haohaop.rag.model;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
-@Schema(description = "Source document match")
+@Schema(description = "来源文档匹配项")
 public record SourceInfo(
-        @Schema(description = "Chunk ID") long id,
-        @Schema(description = "Document title") String title,
-        @Schema(description = "Chunk text content") String chunkText,
-        @Schema(description = "Similarity score") double score
+        @Schema(description = "分块 ID") long id,
+        @Schema(description = "文档标题") String title,
+        @Schema(description = "分块文本内容") String chunkText,
+        @Schema(description = "相似度得分") double score
 ) {}
